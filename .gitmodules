@@ -1,0 +1,3 @@
+[submodule "libs/estool"]
+	path = libs/estool
+	url = git@github.com:MichalPospech/estool.git
