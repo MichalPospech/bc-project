@@ -24,6 +24,14 @@ from es import CMAES, SimpleGA, OpenES, PEPG
 import argparse
 import time
 
+### MPI related code
+comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
+
+PRECISION = 10000
+# SOLUTION_PACKET_SIZE = (5 + num_params) * num_worker_trial
+# RESULT_PACKET_SIZE = 4 * num_worker_trial
+###
 
 ### ES related code
 num_episode = 1
@@ -31,10 +39,8 @@ eval_steps = 25  # evaluate every N_eval steps
 retrain_mode = True
 cap_time_mode = True
 
-num_worker = 8
-num_worker_trial = 16
+num_worker = comm.Get_size()
 
-population = num_worker * num_worker_trial
 
 gamename = "invalid_gamename"
 optimizer = "pepg"
@@ -53,95 +59,111 @@ num_params = -1
 
 es = None
 
-### MPI related code
-comm = MPI.COMM_WORLD
-rank = comm.Get_rank()
 
-PRECISION = 10000
-SOLUTION_PACKET_SIZE = (5 + num_params) * num_worker_trial
-RESULT_PACKET_SIZE = 4 * num_worker_trial
-###
-
-
-def initialize_settings(sigma_init=0.1, sigma_decay=0.9999):
-    global population, filebase, game, model, num_params, es, PRECISION, SOLUTION_PACKET_SIZE, RESULT_PACKET_SIZE
-    population = num_worker * num_worker_trial
-    filebase = (
-        "log/"
-        + gamename
-        + "."
-        + optimizer
-        + "."
-        + str(num_episode)
-        + "."
-        + str(population)
-    )
-    game = config.games[gamename]
-    model = make_model(game)
-    num_params = model.param_count
-    print("size of model", num_params)
-
-    if optimizer == "ses":
-        ses = PEPG(
-            num_params,
-            sigma_init=sigma_init,
-            sigma_decay=sigma_decay,
-            sigma_alpha=0.2,
-            sigma_limit=0.02,
-            elite_ratio=0.1,
-            weight_decay=0.005,
-            popsize=population,
+class Experiment(object):
+    def __init__(
+        self,
+        gamename,
+        optimizer_name,
+        num_episode,
+        eval_steps,
+        num_worker_trial,
+        antithetic,
+        cap_time,
+        retrain,
+        seed_start,
+        sigma_init,
+        sigma_decay,
+    ):
+        self.game = config.games[gamename]
+        self.gamename = gamename
+        self.population = num_worker * num_worker_trial
+        self.antitethic = antithetic
+        self.retrain_mode = args.retrain
+        self.cap_time_mode = args.cap_time
+        self.seed_start = seed_start
+        self.optimizer = Experiment.get_optimizer(
+            optimizer_name, sigma_init, sigma_decay, self.population, self.antitethic
         )
-        es = ses
-    elif optimizer == "ga":
-        ga = SimpleGA(
-            num_params,
-            sigma_init=sigma_init,
-            sigma_decay=sigma_decay,
-            sigma_limit=0.02,
-            elite_ratio=0.1,
-            weight_decay=0.005,
-            popsize=population,
+        self.model = make_model(game)
+        self.num_params = model.param_count
+        self.num_worker_trial = num_worker_trial
+        self.num_episode = num_episode
+        self.log_filebase = (
+            "log/"
+            + gamename
+            + "."
+            + optimizer_name
+            + "."
+            + str(self.num_episode)
+            + "."
+            + str(self.population)
         )
-        es = ga
-    elif optimizer == "cma":
-        cma = CMAES(num_params, sigma_init=sigma_init, popsize=population)
-        es = cma
-    elif optimizer == "pepg":
-        pepg = PEPG(
-            num_params,
-            sigma_init=sigma_init,
-            sigma_decay=sigma_decay,
-            sigma_alpha=0.20,
-            sigma_limit=0.02,
-            learning_rate=0.01,
-            learning_rate_decay=1.0,
-            learning_rate_limit=0.01,
-            weight_decay=0.005,
-            popsize=population,
-        )
-        es = pepg
-    else:
-        oes = OpenES(
-            num_params,
-            sigma_init=sigma_init,
-            sigma_decay=sigma_decay,
-            sigma_limit=0.02,
-            learning_rate=0.01,
-            learning_rate_decay=1.0,
-            learning_rate_limit=0.01,
-            antithetic=antithetic,
-            weight_decay=0.005,
-            popsize=population,
-        )
-        es = oes
 
-    PRECISION = 10000
-    SOLUTION_PACKET_SIZE = (5 + num_params) * num_worker_trial
-    RESULT_PACKET_SIZE = 4 * num_worker_trial
+    def get_solution_packet_size(self):
+        return (5 + self.num_params) * self.num_worker_trial
 
+    def get_result_packet_size(self):
+        return 4 * self.num_worker_trial
 
-###
+    @staticmethod
+    def get_optimizer(optimizer_name, sigma_init, sigma_decay, population, antitethic):
+
+        if optimizer_name == "ses":
+            ses = PEPG(
+                num_params,
+                sigma_init=sigma_init,
+                sigma_decay=sigma_decay,
+                sigma_alpha=0.2,
+                sigma_limit=0.02,
+                elite_ratio=0.1,
+                weight_decay=0.005,
+                popsize=population,
+            )
+            es = ses
+        elif optimizer_name == "ga":
+            ga = SimpleGA(
+                num_params,
+                sigma_init=sigma_init,
+                sigma_decay=sigma_decay,
+                sigma_limit=0.02,
+                elite_ratio=0.1,
+                weight_decay=0.005,
+                popsize=population,
+            )
+            es = ga
+        elif optimizer_name == "cma":
+            cma = CMAES(num_params, sigma_init=sigma_init, popsize=population)
+            es = cma
+        elif optimizer_name == "pepg":
+            pepg = PEPG(
+                num_params,
+                sigma_init=sigma_init,
+                sigma_decay=sigma_decay,
+                sigma_alpha=0.20,
+                sigma_limit=0.02,
+                learning_rate=0.01,
+                learning_rate_decay=1.0,
+                learning_rate_limit=0.01,
+                weight_decay=0.005,
+                popsize=population,
+            )
+            es = pepg
+        else:
+            oes = OpenES(
+                num_params,
+                sigma_init=sigma_init,
+                sigma_decay=sigma_decay,
+                sigma_limit=0.02,
+                learning_rate=0.01,
+                learning_rate_decay=1.0,
+                learning_rate_limit=0.01,
+                antithetic=antithetic,
+                weight_decay=0.005,
+                popsize=population,
+            )
+            es = oes
+        return es
 
 
 def sprint(*args):
@@ -242,7 +264,7 @@ def worker(weights, seed, train_mode_int=1, max_len=-1):
     return reward, t
 
 
-def slave():
+def slave(experiment):
     model.make_env()
     packet = np.empty(SOLUTION_PACKET_SIZE, dtype=np.int32)
     while 1:
@@ -300,7 +322,7 @@ def receive_packets_from_slaves():
 def evaluate_batch(model_params, max_len=-1):
     # duplicate model_params
     solutions = []
-    for i in range(es.popsize):
+    for _ in range(es.popsize):
         solutions.append(np.copy(model_params))
 
     seeds = np.arange(es.popsize)
@@ -316,23 +338,23 @@ def evaluate_batch(model_params, max_len=-1):
     return np.mean(reward_list)
 
 
-def master():
+def master(experiment):
 
     start_time = int(time.time())
-    sprint("training", gamename)
-    sprint("population", es.popsize)
+    sprint("training", experiment.gamename)
+    sprint("population", experiment.optimizer.popsize)
     sprint("num_worker", num_worker)
-    sprint("num_worker_trial", num_worker_trial)
+    sprint("num_worker_trial", experiment.num_worker_trial)
     sys.stdout.flush()
 
     seeder = Seeder(seed_start)
 
-    filename = filebase + ".json"
-    filename_log = filebase + ".log.json"
-    filename_hist = filebase + ".hist.json"
-    filename_best = filebase + ".best.json"
+    filename = experiment.log_filebase + ".json"
+    filename_log = experiment.log_filebase + ".log.json"
+    filename_hist = experiment.log_filebase + ".hist.json"
+    filename_best = experiment.filelog_filebasebase + ".best.json"
 
-    model.make_env()
+    experiment.model.make_env()
 
     t = 0
 
@@ -346,7 +368,7 @@ def master():
     while True:
         t += 1
 
-        solutions = es.ask()
+        solutions = experiment.optimizer.ask()
 
         if antithetic:
             seeds = seeder.next_batch(int(es.popsize / 2))
@@ -403,7 +425,7 @@ def master():
         history.append(h)
 
         with open(filename, "wt") as out:
-            res = json.dump(
+            json.dump(
                 [np.array(es.current_param()).round(4).tolist()],
                 out,
                 sort_keys=True,
@@ -412,9 +434,7 @@ def master():
             )
 
         with open(filename_hist, "wt") as out:
-            res = json.dump(
-                history, out, sort_keys=False, indent=0, separators=(",", ":")
-            )
+            json.dump(history, out, sort_keys=False, indent=0, separators=(",", ":"))
 
         sprint(gamename, h)
 
@@ -429,7 +449,7 @@ def master():
             improvement = reward_eval - best_reward_eval
             eval_log.append([t, reward_eval, model_params_quantized])
             with open(filename_log, "wt") as out:
-                res = json.dump(eval_log, out)
+                json.dump(eval_log, out)
             if len(eval_log) == 1 or reward_eval > best_reward_eval:
                 best_reward_eval = reward_eval
                 best_model_params_eval = model_params_quantized
@@ -441,7 +461,7 @@ def master():
                     )
                     es.set_mu(best_model_params_eval)
             with open(filename_best, "wt") as out:
-                res = json.dump(
+                json.dump(
                     [best_model_params_eval, best_reward_eval],
                     out,
                     sort_keys=True,
@@ -462,7 +482,6 @@ def master():
 
 
 def main(args):
-    global gamename, optimizer, num_episode, eval_steps, num_worker_trial, antithetic, seed_start, retrain_mode, cap_time_mode
     gamename = args.gamename
     optimizer = args.optimizer
     num_episode = args.num_episode
@@ -472,14 +491,27 @@ def main(args):
     retrain_mode = args.retrain == 1
     cap_time_mode = args.cap_time == 1
     seed_start = args.seed_start
-
-    initialize_settings(args.sigma_init, args.sigma_decay)
+    sigma_init = args.sigma_init
+    sigma_decay = args.sigma_decay
+    experiment = Experiment(
+        gamename,
+        optimizer,
+        num_episode,
+        eval_steps,
+        num_worker_trial,
+        antithetic,
+        cap_time_mode,
+        retrain_mode,
+        seed_start,
+        sigma_init,
+        sigma_decay,
+    )
 
     sprint("process", rank, "out of total ", comm.Get_size(), "started")
     if rank == 0:
-        master()
+        master(experiment)
     else:
-        slave()
+        slave(experiment)
 
 
 if __name__ == "__main__":
