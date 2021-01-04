@@ -200,48 +200,94 @@ class Seeder:
         return result
 
 
-def encode_solution_packets(seeds, solutions, train_mode=1, max_len=-1):
-    n = len(seeds)
-    result = []
-    worker_num = 0
-    for i in range(n):
-        worker_num = int(i / num_worker_trial) + 1
-        result.append([worker_num, i, seeds[i], train_mode, max_len])
-        result.append(np.round(np.array(solutions[i]) * PRECISION, 0))
-    result = np.concatenate(result).astype(np.int32)
-    result = np.split(result, num_worker)
-    return result
+class Communicator:
+    def __init__(
+        self, precision, solution_packet_size, result_packet_size, num_worker_trial
+    ):
+        self.precision = precision
+        self.solution_packet_size = solution_packet_size
+        self.result_packet_size = result_packet_size
+        self.num_worker_trial = num_worker_trial
 
+    def encode_solution_packets(self, seeds, solutions, train_mode=1, max_len=-1):
+        n = len(seeds)
+        result = []
+        worker_num = 0
+        for i in range(n):
+            worker_num = int(i / self.num_worker_trial) + 1
+            result.append([worker_num, i, seeds[i], train_mode, max_len])
+            result.append(np.round(np.array(solutions[i]) * self.precision, 0))
+        result = np.concatenate(result).astype(np.int32)
+        result = np.split(result, num_worker)
+        return result
 
-def decode_solution_packet(packet):
-    packets = np.split(packet, num_worker_trial)
-    result = []
-    for p in packets:
-        result.append(
-            [p[0], p[1], p[2], p[3], p[4], p[5:].astype(np.float) / PRECISION]
-        )
-    return result
+    def decode_solution_packet(self, packet):
+        packets = np.split(packet, self.num_worker_trial)
+        result = []
+        for p in packets:
+            result.append(
+                [p[0], p[1], p[2], p[3], p[4], p[5:].astype(np.float) / self.precision]
+            )
+        return result
 
+    def encode_result_packet(self, results):
+        r = np.array(results)
+        r[:, 2:4] *= self.precision
+        return r.flatten().astype(np.int32)
 
-def encode_result_packet(results):
-    r = np.array(results)
-    r[:, 2:4] *= PRECISION
-    return r.flatten().astype(np.int32)
+    def decode_result_packet(self, packet):
+        r = packet.reshape(self.num_worker_trial, 4)
+        workers = r[:, 0].tolist()
+        jobs = r[:, 1].tolist()
+        fits = r[:, 2].astype(np.float) / self.precision
+        fits = fits.tolist()
+        times = r[:, 3].astype(np.float) / self.precision
+        times = times.tolist()
+        result = []
+        n = len(jobs)
+        for i in range(n):
+            result.append([workers[i], jobs[i], fits[i], times[i]])
+        return result
 
+    def recive_solution_packet(self):
+        packet = np.empty(self.solution_packet_size, dtype=np.int32)
+        comm.Recv(packet, source=0)
+        assert len(packet) == self.solution_packet_size
+        return self.decode_solution_packet(packet)
 
-def decode_result_packet(packet):
-    r = packet.reshape(num_worker_trial, 4)
-    workers = r[:, 0].tolist()
-    jobs = r[:, 1].tolist()
-    fits = r[:, 2].astype(np.float) / PRECISION
-    fits = fits.tolist()
-    times = r[:, 3].astype(np.float) / PRECISION
-    times = times.tolist()
-    result = []
-    n = len(jobs)
-    for i in range(n):
-        result.append([workers[i], jobs[i], fits[i], times[i]])
-    return result
+    def send_results_packet(self, results):
+        result_packet = self.encode_result_packet(results)
+        assert len(result_packet) == self.result_packet_size
+        comm.Send(result_packet, dest=0)
+
+    def send_packets_to_slaves(self, packet_list):
+        num_worker = comm.Get_size()
+        assert len(packet_list) == num_worker - 1
+        for i in range(1, num_worker):
+            packet = packet_list[i - 1]
+            assert len(packet) == self.solution_packet_size
+            comm.Send(packet, dest=i)
+
+    def receive_packets_from_slaves(self, population):
+        result_packet = np.empty(self.result_packet_size, dtype=np.int32)
+        reward_list_total = np.zeros((population, 2))
+
+        check_results = np.ones(population, dtype=np.int)
+        for i in range(1, num_worker + 1):
+            comm.Recv(result_packet, source=i)
+            results = self.decode_result_packet(result_packet)
+            for result in results:
+                worker_id = int(result[0])
+                possible_error = "work_id = " + str(worker_id) + " source = " + str(i)
+                assert worker_id == i, possible_error
+                idx = int(result[1])
+                reward_list_total[idx, 0] = result[2]
+                reward_list_total[idx, 1] = result[3]
+                check_results[idx] = 0
+
+        check_sum = check_results.sum()
+        assert check_sum == 0, check_sum
+        return reward_list_total
 
 
 def worker(weights, seed, train_mode_int=1, max_len=-1):
@@ -264,13 +310,10 @@ def worker(weights, seed, train_mode_int=1, max_len=-1):
     return reward, t
 
 
-def slave(experiment):
+def slave(experiment, communicator):
     model.make_env()
-    packet = np.empty(SOLUTION_PACKET_SIZE, dtype=np.int32)
     while 1:
-        comm.Recv(packet, source=0)
-        assert len(packet) == SOLUTION_PACKET_SIZE
-        solutions = decode_solution_packet(packet)
+        solutions = communicator.recive_solution_packet()
         results = []
         for solution in solutions:
             worker_id, jobidx, seed, train_mode, max_len, weights = solution
@@ -282,44 +325,10 @@ def slave(experiment):
             seed = int(seed)
             fitness, timesteps = worker(weights, seed, train_mode, max_len)
             results.append([worker_id, jobidx, fitness, timesteps])
-        result_packet = encode_result_packet(results)
-        assert len(result_packet) == RESULT_PACKET_SIZE
-        comm.Send(result_packet, dest=0)
+        communicator.send_results_packet(results)
 
 
-def send_packets_to_slaves(packet_list):
-    num_worker = comm.Get_size()
-    assert len(packet_list) == num_worker - 1
-    for i in range(1, num_worker):
-        packet = packet_list[i - 1]
-        assert len(packet) == SOLUTION_PACKET_SIZE
-        comm.Send(packet, dest=i)
-
-
-def receive_packets_from_slaves():
-    result_packet = np.empty(RESULT_PACKET_SIZE, dtype=np.int32)
-
-    reward_list_total = np.zeros((population, 2))
-
-    check_results = np.ones(population, dtype=np.int)
-    for i in range(1, num_worker + 1):
-        comm.Recv(result_packet, source=i)
-        results = decode_result_packet(result_packet)
-        for result in results:
-            worker_id = int(result[0])
-            possible_error = "work_id = " + str(worker_id) + " source = " + str(i)
-            assert worker_id == i, possible_error
-            idx = int(result[1])
-            reward_list_total[idx, 0] = result[2]
-            reward_list_total[idx, 1] = result[3]
-            check_results[idx] = 0
-
-    check_sum = check_results.sum()
-    assert check_sum == 0, check_sum
-    return reward_list_total
-
-
-def evaluate_batch(model_params, max_len=-1):
+def evaluate_batch(model_params, communicator, max_len=-1):
     # duplicate model_params
     solutions = []
     for _ in range(es.popsize):
@@ -327,18 +336,18 @@ def evaluate_batch(model_params, max_len=-1):
 
     seeds = np.arange(es.popsize)
 
-    packet_list = encode_solution_packets(
+    packet_list = communicator.encode_solution_packets(
         seeds, solutions, train_mode=0, max_len=max_len
     )
 
-    send_packets_to_slaves(packet_list)
-    reward_list_total = receive_packets_from_slaves()
+    communicator.send_packets_to_slaves(packet_list)
+    reward_list_total = communicator.receive_packets_from_slaves()
 
     reward_list = reward_list_total[:, 0]  # get rewards
     return np.mean(reward_list)
 
 
-def master(experiment):
+def master(experiment, communicator):
 
     start_time = int(time.time())
     sprint("training", experiment.gamename)
@@ -376,10 +385,14 @@ def master(experiment):
         else:
             seeds = seeder.next_batch(es.popsize)
 
-        packet_list = encode_solution_packets(seeds, solutions, max_len=max_len)
+        packet_list = communicator.encode_solution_packets(
+            seeds, solutions, max_len=max_len
+        )
 
-        send_packets_to_slaves(packet_list)
-        reward_list_total = receive_packets_from_slaves()
+        communicator.send_packets_to_slaves(packet_list)
+        reward_list_total = communicator.receive_packets_from_slaves(
+            experiment.population
+        )
 
         reward_list = reward_list_total[:, 0]  # get rewards
 
@@ -444,7 +457,9 @@ def master(experiment):
 
             prev_best_reward_eval = best_reward_eval
             model_params_quantized = np.array(es.current_param()).round(4)
-            reward_eval = evaluate_batch(model_params_quantized, max_len=-1)
+            reward_eval = evaluate_batch(
+                model_params_quantized, communicator, max_len=-1
+            )
             model_params_quantized = model_params_quantized.tolist()
             improvement = reward_eval - best_reward_eval
             eval_log.append([t, reward_eval, model_params_quantized])
@@ -506,12 +521,18 @@ def main(args):
         sigma_init,
         sigma_decay,
     )
+    communicator = Communicator(
+        10000,
+        (5 + experiment.model.param_count) * num_worker_trial,
+        4 * num_worker_trial,
+        num_worker_trial,
+    )
 
     sprint("process", rank, "out of total ", comm.Get_size(), "started")
     if rank == 0:
-        master(experiment)
+        master(experiment, communicator)
     else:
-        slave(experiment)
+        slave(experiment, communicator)
 
 
 if __name__ == "__main__":
