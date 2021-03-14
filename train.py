@@ -39,25 +39,10 @@ eval_steps = 25  # evaluate every N_eval steps
 retrain_mode = True
 cap_time_mode = True
 
-num_worker = comm.Get_size()
-
-
-gamename = "invalid_gamename"
-optimizer = "pepg"
-antithetic = True
-batch_mode = "mean"
+num_worker = comm.Get_size() - 1
 
 # seed for reproducibility
 seed_start = 0
-
-### name of the file (can override):
-filebase = None
-
-game = None
-model = None
-num_params = -1
-
-es = None
 
 
 class Experiment(object):
@@ -74,6 +59,7 @@ class Experiment(object):
         seed_start,
         sigma_init,
         sigma_decay,
+        batch_mode,
     ):
         self.game = config.games[gamename]
         self.gamename = gamename
@@ -82,11 +68,16 @@ class Experiment(object):
         self.retrain_mode = args.retrain
         self.cap_time_mode = args.cap_time
         self.seed_start = seed_start
+        self.model = make_model(self.game)
         self.optimizer = Experiment.get_optimizer(
-            optimizer_name, sigma_init, sigma_decay, self.population, self.antitethic
+            self.model.param_count,
+            optimizer_name,
+            sigma_init,
+            sigma_decay,
+            self.population,
+            self.antitethic,
         )
-        self.model = make_model(game)
-        self.num_params = model.param_count
+        self.num_params = self.model.param_count
         self.num_worker_trial = num_worker_trial
         self.num_episode = num_episode
         self.log_filebase = (
@@ -99,6 +90,7 @@ class Experiment(object):
             + "."
             + str(self.population)
         )
+        self.batch_mode = batch_mode
 
     def get_solution_packet_size(self):
         return (5 + self.num_params) * self.num_worker_trial
@@ -107,7 +99,9 @@ class Experiment(object):
         return 4 * self.num_worker_trial
 
     @staticmethod
-    def get_optimizer(optimizer_name, sigma_init, sigma_decay, population, antitethic):
+    def get_optimizer(
+        num_params, optimizer_name, sigma_init, sigma_decay, population, antithetic
+    ):
 
         if optimizer_name == "ses":
             ses = PEPG(
@@ -261,9 +255,9 @@ class Communicator:
         comm.Send(result_packet, dest=0)
 
     def send_packets_to_slaves(self, packet_list):
-        num_worker = comm.Get_size()
-        assert len(packet_list) == num_worker - 1
-        for i in range(1, num_worker):
+        print(f"Workers {num_worker}, packet list {len(packet_list)}")
+        assert len(packet_list) == num_worker
+        for i in range(1, num_worker+1):
             packet = packet_list[i - 1]
             assert len(packet) == self.solution_packet_size
             comm.Send(packet, dest=i)
@@ -271,9 +265,8 @@ class Communicator:
     def receive_packets_from_slaves(self, population):
         result_packet = np.empty(self.result_packet_size, dtype=np.int32)
         reward_list_total = np.zeros((population, 2))
-
         check_results = np.ones(population, dtype=np.int)
-        for i in range(1, num_worker + 1):
+        for i in range(1, num_worker+1):
             comm.Recv(result_packet, source=i)
             results = self.decode_result_packet(result_packet)
             for result in results:
@@ -284,25 +277,25 @@ class Communicator:
                 reward_list_total[idx, 0] = result[2]
                 reward_list_total[idx, 1] = result[3]
                 check_results[idx] = 0
-
+        print(check_results)
         check_sum = check_results.sum()
         assert check_sum == 0, check_sum
         return reward_list_total
 
 
-def worker(weights, seed, train_mode_int=1, max_len=-1):
+def worker(experiment, weights, seed, train_mode_int=1, max_len=-1):
 
     train_mode = train_mode_int == 1
-    model.set_model_params(weights)
+    experiment.model.set_model_params(weights)
     reward_list, t_list = simulate(
-        model,
+        experiment.model,
         train_mode=train_mode,
         render_mode=False,
         num_episode=num_episode,
         seed=seed,
         max_len=max_len,
     )
-    if batch_mode == "min":
+    if experiment.batch_mode == "min":
         reward = np.min(reward_list)
     else:
         reward = np.mean(reward_list)
@@ -311,7 +304,7 @@ def worker(weights, seed, train_mode_int=1, max_len=-1):
 
 
 def slave(experiment, communicator):
-    model.make_env()
+    experiment.model.make_env()
     while 1:
         solutions = communicator.recive_solution_packet()
         results = []
@@ -323,25 +316,25 @@ def slave(experiment, communicator):
             assert worker_id == rank, possible_error
             jobidx = int(jobidx)
             seed = int(seed)
-            fitness, timesteps = worker(weights, seed, train_mode, max_len)
+            fitness, timesteps = worker(experiment, weights, seed, train_mode, max_len)
             results.append([worker_id, jobidx, fitness, timesteps])
         communicator.send_results_packet(results)
 
 
-def evaluate_batch(model_params, communicator, max_len=-1):
+def evaluate_batch(optimizer, model_params, communicator, max_len=-1):
     # duplicate model_params
     solutions = []
-    for _ in range(es.popsize):
+    for _ in range(optimizer.popsize):
         solutions.append(np.copy(model_params))
 
-    seeds = np.arange(es.popsize)
+    seeds = np.arange(optimizer.popsize)
 
     packet_list = communicator.encode_solution_packets(
         seeds, solutions, train_mode=0, max_len=max_len
     )
 
     communicator.send_packets_to_slaves(packet_list)
-    reward_list_total = communicator.receive_packets_from_slaves()
+    reward_list_total = communicator.receive_packets_from_slaves(optimizer.popsize)
 
     reward_list = reward_list_total[:, 0]  # get rewards
     return np.mean(reward_list)
@@ -361,7 +354,7 @@ def master(experiment, communicator):
     filename = experiment.log_filebase + ".json"
     filename_log = experiment.log_filebase + ".log.json"
     filename_hist = experiment.log_filebase + ".hist.json"
-    filename_best = experiment.filelog_filebasebase + ".best.json"
+    filename_best = experiment.log_filebase + ".best.json"
 
     experiment.model.make_env()
 
@@ -376,14 +369,14 @@ def master(experiment, communicator):
 
     while True:
         t += 1
-
+        es = experiment.optimizer
         solutions = experiment.optimizer.ask()
 
-        if antithetic:
-            seeds = seeder.next_batch(int(es.popsize / 2))
+        if experiment.antitethic:
+            seeds = seeder.next_batch(int(experiment.optimizer.popsize / 2))
             seeds = seeds + seeds
         else:
-            seeds = seeder.next_batch(es.popsize)
+            seeds = seeder.next_batch(experiment.optimizer.popsize)
 
         packet_list = communicator.encode_solution_packets(
             seeds, solutions, max_len=max_len
@@ -391,7 +384,7 @@ def master(experiment, communicator):
 
         communicator.send_packets_to_slaves(packet_list)
         reward_list_total = communicator.receive_packets_from_slaves(
-            experiment.population
+            experiment.optimizer.popsize
         )
 
         reward_list = reward_list_total[:, 0]  # get rewards
@@ -405,13 +398,13 @@ def master(experiment, communicator):
         avg_reward = int(np.mean(reward_list) * 100) / 100.0  # get average time step
         std_reward = int(np.std(reward_list) * 100) / 100.0  # get average time step
 
-        es.tell(reward_list)
+        experiment.optimizer.tell(reward_list)
 
-        es_solution = es.result()
+        es_solution = experiment.optimizer.result()
         model_params = es_solution[0]  # best historical solution
         reward = es_solution[1]  # best reward
         curr_reward = es_solution[2]  # best of the current batch
-        model.set_model_params(np.array(model_params).round(4))
+        experiment.model.set_model_params(np.array(model_params).round(4))
 
         r_max = int(np.max(reward_list) * 100) / 100.0
         r_min = int(np.min(reward_list) * 100) / 100.0
@@ -439,7 +432,7 @@ def master(experiment, communicator):
 
         with open(filename, "wt") as out:
             json.dump(
-                [np.array(es.current_param()).round(4).tolist()],
+                [np.array(experiment.optimizer.current_param()).round(4).tolist()],
                 out,
                 sort_keys=True,
                 indent=2,
@@ -449,7 +442,7 @@ def master(experiment, communicator):
         with open(filename_hist, "wt") as out:
             json.dump(history, out, sort_keys=False, indent=0, separators=(",", ":"))
 
-        sprint(gamename, h)
+        sprint(experiment.gamename, h)
 
         if t == 1:
             best_reward_eval = avg_reward
@@ -458,7 +451,7 @@ def master(experiment, communicator):
             prev_best_reward_eval = best_reward_eval
             model_params_quantized = np.array(es.current_param()).round(4)
             reward_eval = evaluate_batch(
-                model_params_quantized, communicator, max_len=-1
+                experiment.optimizer, model_params_quantized, communicator, max_len=-1
             )
             model_params_quantized = model_params_quantized.tolist()
             improvement = reward_eval - best_reward_eval
@@ -508,6 +501,7 @@ def main(args):
     seed_start = args.seed_start
     sigma_init = args.sigma_init
     sigma_decay = args.sigma_decay
+    batch_mode = args.batch_mode
     experiment = Experiment(
         gamename,
         optimizer,
@@ -520,6 +514,7 @@ def main(args):
         seed_start,
         sigma_init,
         sigma_decay,
+        batch_mode,
     )
     communicator = Communicator(
         10000,
@@ -579,7 +574,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--sigma_init", type=float, default=0.10, help="sigma_init")
     parser.add_argument("--sigma_decay", type=float, default=0.999, help="sigma_decay")
+    parser.add_argument("--batch_mode", type=str, default="mean", help="batch_mode")
 
     args = parser.parse_args()
     main(args)
-
