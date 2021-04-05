@@ -255,7 +255,6 @@ class Communicator:
         comm.Send(result_packet, dest=0)
 
     def send_packets_to_slaves(self, packet_list):
-        print(f"Workers {num_worker}, packet list {len(packet_list)}")
         assert len(packet_list) == num_worker
         for i in range(1, num_worker+1):
             packet = packet_list[i - 1]
@@ -277,7 +276,6 @@ class Communicator:
                 reward_list_total[idx, 0] = result[2]
                 reward_list_total[idx, 1] = result[3]
                 check_results[idx] = 0
-        print(check_results)
         check_sum = check_results.sum()
         assert check_sum == 0, check_sum
         return reward_list_total
@@ -349,7 +347,7 @@ def master(experiment, communicator):
     sprint("num_worker_trial", experiment.num_worker_trial)
     sys.stdout.flush()
 
-    seeder = Seeder(seed_start)
+    seeder = Seeder(experiment.seed_start)
 
     filename = experiment.log_filebase + ".json"
     filename_log = experiment.log_filebase + ".log.json"
