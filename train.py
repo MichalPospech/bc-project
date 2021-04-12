@@ -34,10 +34,6 @@ PRECISION = 10000
 ###
 
 ### ES related code
-num_episode = 1
-eval_steps = 25  # evaluate every N_eval steps
-retrain_mode = True
-cap_time_mode = True
 
 num_worker = comm.Get_size() - 1
 
@@ -278,18 +274,19 @@ class Communicator:
                 check_results[idx] = 0
         check_sum = check_results.sum()
         assert check_sum == 0, check_sum
+
         return reward_list_total
 
 
 def worker(experiment, weights, seed, train_mode_int=1, max_len=-1):
 
-    train_mode = train_mode_int == 1
+    train_mode = (train_mode_int == 1)
     experiment.model.set_model_params(weights)
     reward_list, t_list = simulate(
         experiment.model,
         train_mode=train_mode,
         render_mode=False,
-        num_episode=num_episode,
+        num_episode=experiment.num_episode,
         seed=seed,
         max_len=max_len,
     )
@@ -421,7 +418,7 @@ def master(experiment, communicator):
             int(max_time_step) + 1,
         )
 
-        if cap_time_mode:
+        if experiment.cap_time_mode:
             max_len = 2 * int(mean_time_step + 1.0)
         else:
             max_len = -1
