@@ -20,7 +20,7 @@ import subprocess
 import sys
 import config
 from model import make_model, simulate
-from es import CMAES, SimpleGA, OpenES, PEPG
+from es import CMAES, NES, SimpleGA, OpenES, PEPG
 import argparse
 import time
 
@@ -36,10 +36,6 @@ PRECISION = 10000
 ### ES related code
 
 num_worker = comm.Get_size() - 1
-
-# seed for reproducibility
-seed_start = 0
-
 
 class Experiment(object):
     def __init__(
@@ -61,8 +57,8 @@ class Experiment(object):
         self.gamename = gamename
         self.population = num_worker * num_worker_trial
         self.antitethic = antithetic
-        self.retrain_mode = args.retrain
-        self.cap_time_mode = args.cap_time
+        self.retrain_mode = retrain
+        self.cap_time_mode = cap_time
         self.seed_start = seed_start
         self.model = make_model(self.game)
         self.optimizer = Experiment.get_optimizer(
@@ -87,6 +83,7 @@ class Experiment(object):
             + str(self.population)
         )
         self.batch_mode = batch_mode
+        self.eval_steps = eval_steps
 
     def get_solution_packet_size(self):
         return (5 + self.num_params) * self.num_worker_trial
@@ -96,7 +93,12 @@ class Experiment(object):
 
     @staticmethod
     def get_optimizer(
-        num_params, optimizer_name, sigma_init, sigma_decay, population, antithetic
+        num_params,
+        optimizer_name,
+        sigma_init,
+        sigma_decay,
+        population,
+        antithetic,
     ):
 
         if optimizer_name == "ses":
@@ -139,6 +141,14 @@ class Experiment(object):
                 popsize=population,
             )
             es = pepg
+        elif optimizer_name == "nes":
+            nes = NES(
+                num_params,
+                sigma_init=sigma_init,
+                antithetic=antithetic,
+                popsize=population
+            )
+            es = nes
         else:
             oes = OpenES(
                 num_params,
@@ -252,7 +262,7 @@ class Communicator:
 
     def send_packets_to_slaves(self, packet_list):
         assert len(packet_list) == num_worker
-        for i in range(1, num_worker+1):
+        for i in range(1, num_worker + 1):
             packet = packet_list[i - 1]
             assert len(packet) == self.solution_packet_size
             comm.Send(packet, dest=i)
@@ -261,7 +271,7 @@ class Communicator:
         result_packet = np.empty(self.result_packet_size, dtype=np.int32)
         reward_list_total = np.zeros((population, 2))
         check_results = np.ones(population, dtype=np.int)
-        for i in range(1, num_worker+1):
+        for i in range(1, num_worker + 1):
             comm.Recv(result_packet, source=i)
             results = self.decode_result_packet(result_packet)
             for result in results:
@@ -274,15 +284,14 @@ class Communicator:
                 check_results[idx] = 0
         check_sum = check_results.sum()
         assert check_sum == 0, check_sum
-
         return reward_list_total
 
 
 def worker(experiment, weights, seed, train_mode_int=1, max_len=-1):
 
-    train_mode = (train_mode_int == 1)
+    train_mode = train_mode_int == 1
     experiment.model.set_model_params(weights)
-    reward_list, t_list = simulate(
+    reward_list, t_list, end_state = simulate(
         experiment.model,
         train_mode=train_mode,
         render_mode=False,
@@ -295,7 +304,7 @@ def worker(experiment, weights, seed, train_mode_int=1, max_len=-1):
     else:
         reward = np.mean(reward_list)
     t = np.mean(t_list)
-    return reward, t
+    return reward, t, end_state
 
 
 def slave(experiment, communicator):
@@ -311,7 +320,7 @@ def slave(experiment, communicator):
             assert worker_id == rank, possible_error
             jobidx = int(jobidx)
             seed = int(seed)
-            fitness, timesteps = worker(experiment, weights, seed, train_mode, max_len)
+            fitness, timesteps, _ = worker(experiment, weights, seed, train_mode, max_len)
             results.append([worker_id, jobidx, fitness, timesteps])
         communicator.send_results_packet(results)
 
@@ -441,7 +450,7 @@ def master(experiment, communicator):
 
         if t == 1:
             best_reward_eval = avg_reward
-        if t % eval_steps == 0:  # evaluate on actual task at hand
+        if t % experiment.eval_steps == 0:  # evaluate on actual task at hand
 
             prev_best_reward_eval = best_reward_eval
             model_params_quantized = np.array(es.current_param()).round(4)
@@ -457,7 +466,7 @@ def master(experiment, communicator):
                 best_reward_eval = reward_eval
                 best_model_params_eval = model_params_quantized
             else:
-                if retrain_mode:
+                if experiment.retrain_mode:
                     sprint(
                         "reset to previous best params, where best_reward_eval =",
                         best_reward_eval,
