@@ -89,7 +89,7 @@ class Experiment(object):
         return (5 + self.num_params) * self.num_worker_trial
 
     def get_result_packet_size(self):
-        return 4 * self.num_worker_trial
+        return (4 + self.game.input_size) * self.num_worker_trial
 
     @staticmethod
     def get_optimizer(
@@ -202,12 +202,13 @@ class Seeder:
 
 class Communicator:
     def __init__(
-        self, precision, solution_packet_size, result_packet_size, num_worker_trial
+        self, precision, solution_packet_size, result_packet_size, num_worker_trial, final_pos_size
     ):
         self.precision = precision
         self.solution_packet_size = solution_packet_size
         self.result_packet_size = result_packet_size
         self.num_worker_trial = num_worker_trial
+        self.final_pos_size = final_pos_size
 
     def encode_solution_packets(self, seeds, solutions, train_mode=1, max_len=-1):
         n = len(seeds)
@@ -232,17 +233,19 @@ class Communicator:
 
     def encode_result_packet(self, results):
         r = np.array(results)
-        r[:, 2:4] *= self.precision
+        r[:, 2:] *= self.precision
         return r.flatten().astype(np.int32)
 
     def decode_result_packet(self, packet):
-        r = packet.reshape(self.num_worker_trial, 4)
+        r = packet.reshape(self.num_worker_trial, 4+self.final_pos_size)
         workers = r[:, 0].tolist()
         jobs = r[:, 1].tolist()
         fits = r[:, 2].astype(np.float) / self.precision
         fits = fits.tolist()
         times = r[:, 3].astype(np.float) / self.precision
         times = times.tolist()
+        positions = r[:,4:].astype(np.float) / self.precision
+
         result = []
         n = len(jobs)
         for i in range(n):
@@ -320,8 +323,8 @@ def slave(experiment, communicator):
             assert worker_id == rank, possible_error
             jobidx = int(jobidx)
             seed = int(seed)
-            fitness, timesteps, _ = worker(experiment, weights, seed, train_mode, max_len)
-            results.append([worker_id, jobidx, fitness, timesteps])
+            fitness, timesteps, end_state = worker(experiment, weights, seed, train_mode, max_len)
+            results.append([worker_id, jobidx, fitness, timesteps, end_state])
         communicator.send_results_packet(results)
 
 
@@ -525,6 +528,7 @@ def main(args):
         (5 + experiment.model.param_count) * num_worker_trial,
         4 * num_worker_trial,
         num_worker_trial,
+        experiment.game.input_size
     )
 
     sprint("process", rank, "out of total ", comm.Get_size(), "started")
