@@ -245,11 +245,12 @@ class Communicator:
         times = r[:, 3].astype(np.float) / self.precision
         times = times.tolist()
         positions = r[:,4:].astype(np.float) / self.precision
+        positions = positions.tolist()
 
         result = []
         n = len(jobs)
         for i in range(n):
-            result.append([workers[i], jobs[i], fits[i], times[i]])
+            result.append([workers[i], jobs[i], fits[i], times[i], *positions[i]])
         return result
 
     def recive_solution_packet(self):
