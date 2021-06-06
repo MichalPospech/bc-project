@@ -37,6 +37,7 @@ PRECISION = 10000
 
 num_worker = comm.Get_size() - 1
 
+
 class Experiment(object):
     def __init__(
         self,
@@ -146,7 +147,7 @@ class Experiment(object):
                 num_params,
                 sigma_init=sigma_init,
                 antithetic=antithetic,
-                popsize=population
+                popsize=population,
             )
             es = nes
         else:
@@ -202,7 +203,12 @@ class Seeder:
 
 class Communicator:
     def __init__(
-        self, precision, solution_packet_size, result_packet_size, num_worker_trial, final_pos_size
+        self,
+        precision,
+        solution_packet_size,
+        result_packet_size,
+        num_worker_trial,
+        final_pos_size,
     ):
         self.precision = precision
         self.solution_packet_size = solution_packet_size
@@ -237,14 +243,14 @@ class Communicator:
         return r.flatten().astype(np.int32)
 
     def decode_result_packet(self, packet):
-        r = packet.reshape(self.num_worker_trial, 4+self.final_pos_size)
+        r = packet.reshape(self.num_worker_trial, 4 + self.final_pos_size)
         workers = r[:, 0].tolist()
         jobs = r[:, 1].tolist()
         fits = r[:, 2].astype(np.float) / self.precision
         fits = fits.tolist()
         times = r[:, 3].astype(np.float) / self.precision
         times = times.tolist()
-        positions = r[:,4:].astype(np.float) / self.precision
+        positions = r[:, 4:].astype(np.float) / self.precision
         positions = positions.tolist()
 
         result = []
@@ -324,7 +330,9 @@ def slave(experiment, communicator):
             assert worker_id == rank, possible_error
             jobidx = int(jobidx)
             seed = int(seed)
-            fitness, timesteps, end_state = worker(experiment, weights, seed, train_mode, max_len)
+            fitness, timesteps, end_state = worker(
+                experiment, weights, seed, train_mode, max_len
+            )
             results.append([worker_id, jobidx, fitness, timesteps, end_state])
         communicator.send_results_packet(results)
 
@@ -366,6 +374,26 @@ def master(experiment, communicator):
 
     experiment.model.make_env()
 
+    def evaluate_initials(solutions):
+        if experiment.antitethic:
+            seeds = seeder.next_batch(int(experiment.optimizer.popsize / 2))
+            seeds = seeds + seeds
+        else:
+            seeds = seeder.next_batch(experiment.optimizer.popsize)
+
+        packet_list = communicator.encode_solution_packets(
+            seeds, solutions, max_len=max_len
+        )
+
+        communicator.send_packets_to_slaves(packet_list)
+        reward_list_total = communicator.receive_packets_from_slaves(
+            experiment.optimizer.popsize
+        )
+        rewards = reward_list_total[:, 0]
+        chars = reward_list_total[:, 4:]
+        return rewards, chars
+
+    experiment.optimizer.init(evaluate_initials)
     t = 0
 
     history = []
@@ -405,8 +433,32 @@ def master(experiment, communicator):
         )  # get average time step
         avg_reward = int(np.mean(reward_list) * 100) / 100.0  # get average time step
         std_reward = int(np.std(reward_list) * 100) / 100.0  # get average time step
+        chars = reward_list_total[:, 4:]
 
-        experiment.optimizer.tell(reward_list)
+        def evaluate_result(weights, experiment, seed, max_len):
+            experiment.model.set_model_params(weights)
+            reward_list, t_list, end_state = simulate(
+                experiment.model,
+                train_mode=False,
+                render_mode=False,
+                num_episode=experiment.num_episode,
+                seed=seed,
+                max_len=max_len,
+            )
+            if experiment.batch_mode == "min":
+                reward = np.min(reward_list)
+            else:
+                reward = np.mean(reward_list)
+            t = np.mean(t_list)
+            return reward, end_state
+
+        experiment.optimizer.tell(
+            reward_list,
+            chars,
+            lambda weights: evaluate_result(
+                weights, experiment, seeder.next_seed(), max_len
+            ),
+        )
 
         es_solution = experiment.optimizer.result()
         model_params = es_solution[0]  # best historical solution
@@ -529,7 +581,7 @@ def main(args):
         (5 + experiment.model.param_count) * num_worker_trial,
         4 * num_worker_trial,
         num_worker_trial,
-        experiment.game.input_size
+        experiment.game.input_size,
     )
 
     sprint("process", rank, "out of total ", comm.Get_size(), "started")
