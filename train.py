@@ -374,6 +374,20 @@ def master(experiment, communicator):
 
     experiment.model.make_env()
 
+    def evaluate_locally(weights, experiment, seed, max_len):
+        experiment.model.set_model_params(weights)
+        reward_list, _, end_states = simulate(
+            experiment.model,
+            train_mode=False,
+            render_mode=False,
+            num_episode=experiment.num_episode,
+            seed=seed,
+            max_len=max_len,
+        )
+        reward = reward_list[0]
+        end_state = end_states[0]
+        return reward, end_state
+
     def evaluate_initials(solutions):
         if experiment.antitethic:
             seeds = seeder.next_batch(int(experiment.optimizer.popsize / 2))
@@ -381,16 +395,12 @@ def master(experiment, communicator):
         else:
             seeds = seeder.next_batch(experiment.optimizer.popsize)
 
-        packet_list = communicator.encode_solution_packets(
-            seeds, solutions, max_len=max_len
-        )
-
-        communicator.send_packets_to_slaves(packet_list)
-        reward_list_total = communicator.receive_packets_from_slaves(
-            experiment.optimizer.popsize
-        )
-        rewards = reward_list_total[:, 0]
-        chars = reward_list_total[:, 4:]
+        chars =[]
+        rewards=[]
+        for i in range(solutions.dim[0]):
+            r, c = evaluate_locally(solutions[i,:], experiment, seeds[i], max_len)
+            rewards.append(r)
+            chars.append(c)
         return rewards, chars
 
     experiment.optimizer.init(evaluate_initials)
@@ -435,27 +445,10 @@ def master(experiment, communicator):
         std_reward = int(np.std(reward_list) * 100) / 100.0  # get average time step
         chars = reward_list_total[:, 4:]
 
-        def evaluate_result(weights, experiment, seed, max_len):
-            experiment.model.set_model_params(weights)
-            reward_list, t_list, end_state = simulate(
-                experiment.model,
-                train_mode=False,
-                render_mode=False,
-                num_episode=experiment.num_episode,
-                seed=seed,
-                max_len=max_len,
-            )
-            if experiment.batch_mode == "min":
-                reward = np.min(reward_list)
-            else:
-                reward = np.mean(reward_list)
-            t = np.mean(t_list)
-            return reward, end_state
-
         experiment.optimizer.tell(
             reward_list,
             chars,
-            lambda weights: evaluate_result(
+            lambda weights: evaluate_locally(
                 weights, experiment, seeder.next_seed(), max_len
             ),
         )
@@ -548,7 +541,8 @@ def master(experiment, communicator):
                 best_reward_eval,
             )
 
-
+#TODO Assert parameters (num episodes = 1 for novelty, etc.)
+#TODO Add parameters for NSR-ES - metapopulation size etc.
 def main(args):
     gamename = args.gamename
     optimizer = args.optimizer
