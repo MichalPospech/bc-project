@@ -20,22 +20,18 @@ import subprocess
 import sys
 import config
 from model import make_model, simulate
-from es import CMAES, NES, SimpleGA, OpenES, PEPG
+from es import CMAES, NSES, SimpleGA, OpenES, PEPG
 import argparse
 import time
 
 ### MPI related code
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
+num_worker = comm.Get_size() - 1
 
 PRECISION = 10000
-# SOLUTION_PACKET_SIZE = (5 + num_params) * num_worker_trial
-# RESULT_PACKET_SIZE = 4 * num_worker_trial
-###
 
-### ES related code
 
-num_worker = comm.Get_size() - 1
 
 
 class Experiment(object):
@@ -142,8 +138,8 @@ class Experiment(object):
                 popsize=population,
             )
             es = pepg
-        elif optimizer_name == "nes":
-            nes = NES(
+        elif optimizer_name == "nses":
+            nes = NSES(
                 num_params,
                 sigma_init=sigma_init,
                 antithetic=antithetic,
@@ -168,7 +164,7 @@ class Experiment(object):
 
 
 def sprint(*args):
-    print(args)  # if python3, can do print(*args)
+    print(*args)  # if python3, can do print(*args)
     sys.stdout.flush()
 
 
@@ -208,13 +204,13 @@ class Communicator:
         solution_packet_size,
         result_packet_size,
         num_worker_trial,
-        final_pos_size,
+        final_state_size,
     ):
         self.precision = precision
         self.solution_packet_size = solution_packet_size
         self.result_packet_size = result_packet_size
         self.num_worker_trial = num_worker_trial
-        self.final_pos_size = final_pos_size
+        self.final_state_size = final_state_size
 
     def encode_solution_packets(self, seeds, solutions, train_mode=1, max_len=-1):
         n = len(seeds)
@@ -243,7 +239,7 @@ class Communicator:
         return r.flatten().astype(np.int32)
 
     def decode_result_packet(self, packet):
-        r = packet.reshape(self.num_worker_trial, 4 + self.final_pos_size)
+        r = packet.reshape(self.num_worker_trial, 4 + self.final_state_size)
         workers = r[:, 0].tolist()
         jobs = r[:, 1].tolist()
         fits = r[:, 2].astype(np.float) / self.precision
@@ -455,8 +451,6 @@ def master(experiment, communicator):
 
         es_solution = experiment.optimizer.result()
         model_params = es_solution[0]  # best historical solution
-        reward = es_solution[1]  # best reward
-        curr_reward = es_solution[2]  # best of the current batch
         experiment.model.set_model_params(np.array(model_params).round(4))
 
         r_max = int(np.max(reward_list) * 100) / 100.0
@@ -543,6 +537,7 @@ def master(experiment, communicator):
 
 #TODO Assert parameters (num episodes = 1 for novelty, etc.)
 #TODO Add parameters for NSR-ES - metapopulation size etc.
+#TODO Config from JSON
 def main(args):
     gamename = args.gamename
     optimizer = args.optimizer
@@ -588,7 +583,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description=(
-            "Train policy on OpenAI Gym environment " "using pepg, ses, openes, ga, cma"
+            "Train policy on OpenAI Gym environment " "using pepg, ses, openes, ga, cma, nses, nsres, nsraes"
         )
     )
     parser.add_argument(
