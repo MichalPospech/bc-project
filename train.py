@@ -20,7 +20,7 @@ import subprocess
 import sys
 import config
 from model import make_model, simulate
-from es import CMAES, NSES, SimpleGA, OpenES, PEPG
+from es import CMAES, NSES, SimpleGA, OpenES, PEPG, NSRAES, NSRES
 import argparse
 import time
 
@@ -32,13 +32,11 @@ num_worker = comm.Get_size() - 1
 PRECISION = 10000
 
 
-
-
 class Experiment(object):
     def __init__(
         self,
         gamename,
-        algorithm_name,
+        algorithm,
         num_episode,
         eval_steps,
         num_worker_trial,
@@ -49,6 +47,7 @@ class Experiment(object):
         sigma_decay,
         batch_mode,
     ):
+        algorithm_name = algorithm["name"]
         self.game = config.games[gamename]
         self.gamename = gamename
         self.population = num_worker * num_worker_trial
@@ -57,11 +56,7 @@ class Experiment(object):
         self.seed_start = seed_start
         self.model = make_model(self.game)
         self.optimizer = Experiment.get_algorithm(
-            self.model.param_count,
-            algorithm_name,
-            sigma_init,
-            sigma_decay,
-            self.population,
+            self.model.param_count, self.population, **algorithm
         )
         self.num_params = self.model.param_count
         self.num_worker_trial = num_worker_trial
@@ -75,6 +70,8 @@ class Experiment(object):
             + str(self.num_episode)
             + "."
             + str(self.population)
+            + "."
+            + str(int(time.time()))
         )
         self.batch_mode = batch_mode
         self.eval_steps = eval_steps
@@ -86,56 +83,28 @@ class Experiment(object):
         return (4 + self.game.input_size) * self.num_worker_trial
 
     @staticmethod
-    def get_algorithm(
-        num_params,
-        population,
-        algorithm_params
-    ):
-        optimizer_name = algorithm_params['name']
-        algorithm_params.pop('name')
+    def get_algorithm(num_params, population, algorithm_params):
+        optimizer_name = algorithm_params["name"]
+        algorithm_params.pop("name")
         es = None
         if optimizer_name == "ses":
-            ses = PEPG(
-                num_params,
-                popsize=population,
-                **algorithm_params
-            )
-            es = ses
+            es = PEPG(num_params, popsize=population, **algorithm_params)
         elif optimizer_name == "ga":
-            ga = SimpleGA(
-                num_params,
-                popsize=population,
-                **algorithm_params
-            )
-            es = ga
+            es = SimpleGA(num_params, popsize=population, **algorithm_params)
         elif optimizer_name == "cma":
-            cma = CMAES(
-                num_params, 
-                popsize=population, 
-                **algorithm_params
-            )
-            es = cma
+            es = CMAES(num_params, popsize=population, **algorithm_params)
         elif optimizer_name == "pepg":
-            pepg = PEPG(
-                num_params,
-                popsize=population,
-                **algorithm_params
-            )
-            es = pepg
+            es = PEPG(num_params, popsize=population, **algorithm_params)
         elif optimizer_name == "nses":
-            nes = NSES(
-                num_params,
-                popsize=population,
-                **algorithm_params
-            )
-            es = nes
+            es = NSES(num_params, popsize=population, **algorithm_params)
+        elif optimizer_name == "nsres":
+            es = NSRES(num_params, popsize=population, **algorithm_params)
+        elif optimizer_name == "nsraes":
+            es = NSRAES(num_params, popsize=population, **algorithm_params)
+        elif optimizer_name == "openes":
+            es = OpenES(num_params, popsize=population, **algorithm_params)
         else:
-            oes = OpenES(
-                num_params,
-                popsize=population,
-                **algorithm_params
-            )
-            es = oes
+            raise ValueError(f"Unknown optimizer name {optimizer_name}")
         return es
 
 
@@ -367,10 +336,10 @@ def master(experiment, communicator):
         else:
             seeds = seeder.next_batch(experiment.optimizer.popsize)
 
-        chars =[]
-        rewards=[]
+        chars = []
+        rewards = []
         for i in range(solutions.dim[0]):
-            r, c = evaluate_locally(solutions[i,:], experiment, seeds[i], max_len)
+            r, c = evaluate_locally(solutions[i, :], experiment, seeds[i], max_len)
             rewards.append(r)
             chars.append(c)
         return rewards, chars
@@ -511,19 +480,17 @@ def master(experiment, communicator):
                 best_reward_eval,
             )
 
-#TODO Assert parameters (num episodes = 1 for novelty, etc.)
-#TODO Add parameters for NSR-ES - metapopulation size etc.
-#TODO Config from JSON
+
+# TODO Assert parameters (num episodes = 1 for novelty, etc.)
+# TODO Config from JSON
 def main(params):
 
-    experiment = Experiment(
-        **params
-    )
+    experiment = Experiment(**params)
     communicator = Communicator(
         10000,
-        (5 + experiment.model.param_count) * params['num_worker_trial'],
-        4 * params['num_worker_trial'],
-        params['num_worker_trial'],
+        (5 + experiment.model.param_count) * params["num_worker_trial"],
+        4 * params["num_worker_trial"],
+        params["num_worker_trial"],
         experiment.game.input_size,
     )
 
@@ -537,15 +504,16 @@ def main(params):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description=(
-            "Train policy on OpenAI Gym environment " "using pepg, ses, openes, ga, cma, nses, nsres, nsraes"
+            "Train policy on OpenAI Gym environment "
+            "using pepg, ses, openes, ga, cma, nses, nsres, nsraes"
         )
     )
     parser.add_argument(
-        "filename","-f", type=str, help="robo_pendulum, robo_ant, robo_humanoid, etc."
+        "filename", "-f", type=str, help="robo_pendulum, robo_ant, robo_humanoid, etc."
     )
     args = parser.parse_args()
     parameters = None
 
-    with open(args.filename, 'r',encoding='utf-8') as json_file:
+    with open(args.filename, "r", encoding="utf-8") as json_file:
         parameters = json.load(json_file)
     main(parameters)
