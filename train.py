@@ -38,11 +38,10 @@ class Experiment(object):
     def __init__(
         self,
         gamename,
-        optimizer_name,
+        algorithm_name,
         num_episode,
         eval_steps,
         num_worker_trial,
-        antithetic,
         cap_time,
         retrain,
         seed_start,
@@ -53,18 +52,16 @@ class Experiment(object):
         self.game = config.games[gamename]
         self.gamename = gamename
         self.population = num_worker * num_worker_trial
-        self.antitethic = antithetic
         self.retrain_mode = retrain
         self.cap_time_mode = cap_time
         self.seed_start = seed_start
         self.model = make_model(self.game)
-        self.optimizer = Experiment.get_optimizer(
+        self.optimizer = Experiment.get_algorithm(
             self.model.param_count,
-            optimizer_name,
+            algorithm_name,
             sigma_init,
             sigma_decay,
             self.population,
-            self.antitethic,
         )
         self.num_params = self.model.param_count
         self.num_worker_trial = num_worker_trial
@@ -73,7 +70,7 @@ class Experiment(object):
             "log/"
             + gamename
             + "."
-            + optimizer_name
+            + algorithm_name
             + "."
             + str(self.num_episode)
             + "."
@@ -89,75 +86,54 @@ class Experiment(object):
         return (4 + self.game.input_size) * self.num_worker_trial
 
     @staticmethod
-    def get_optimizer(
+    def get_algorithm(
         num_params,
-        optimizer_name,
-        sigma_init,
-        sigma_decay,
         population,
-        antithetic,
+        algorithm_params
     ):
-
+        optimizer_name = algorithm_params['name']
+        algorithm_params.pop('name')
+        es = None
         if optimizer_name == "ses":
             ses = PEPG(
                 num_params,
-                sigma_init=sigma_init,
-                sigma_decay=sigma_decay,
-                sigma_alpha=0.2,
-                sigma_limit=0.02,
-                elite_ratio=0.1,
-                weight_decay=0.005,
                 popsize=population,
+                **algorithm_params
             )
             es = ses
         elif optimizer_name == "ga":
             ga = SimpleGA(
                 num_params,
-                sigma_init=sigma_init,
-                sigma_decay=sigma_decay,
-                sigma_limit=0.02,
-                elite_ratio=0.1,
-                weight_decay=0.005,
                 popsize=population,
+                **algorithm_params
             )
             es = ga
         elif optimizer_name == "cma":
-            cma = CMAES(num_params, sigma_init=sigma_init, popsize=population)
+            cma = CMAES(
+                num_params, 
+                popsize=population, 
+                **algorithm_params
+            )
             es = cma
         elif optimizer_name == "pepg":
             pepg = PEPG(
                 num_params,
-                sigma_init=sigma_init,
-                sigma_decay=sigma_decay,
-                sigma_alpha=0.20,
-                sigma_limit=0.02,
-                learning_rate=0.01,
-                learning_rate_decay=1.0,
-                learning_rate_limit=0.01,
-                weight_decay=0.005,
                 popsize=population,
+                **algorithm_params
             )
             es = pepg
         elif optimizer_name == "nses":
             nes = NSES(
                 num_params,
-                sigma_init=sigma_init,
-                antithetic=antithetic,
                 popsize=population,
+                **algorithm_params
             )
             es = nes
         else:
             oes = OpenES(
                 num_params,
-                sigma_init=sigma_init,
-                sigma_decay=sigma_decay,
-                sigma_limit=0.02,
-                learning_rate=0.01,
-                learning_rate_decay=1.0,
-                learning_rate_limit=0.01,
-                antithetic=antithetic,
-                weight_decay=0.005,
                 popsize=population,
+                **algorithm_params
             )
             es = oes
         return es
@@ -538,38 +514,16 @@ def master(experiment, communicator):
 #TODO Assert parameters (num episodes = 1 for novelty, etc.)
 #TODO Add parameters for NSR-ES - metapopulation size etc.
 #TODO Config from JSON
-def main(args):
-    gamename = args.gamename
-    optimizer = args.optimizer
-    num_episode = args.num_episode
-    eval_steps = args.eval_steps
-    num_worker_trial = args.num_worker_trial
-    antithetic = args.antithetic == 1
-    retrain_mode = args.retrain == 1
-    cap_time_mode = args.cap_time == 1
-    seed_start = args.seed_start
-    sigma_init = args.sigma_init
-    sigma_decay = args.sigma_decay
-    batch_mode = args.batch_mode
+def main(params):
+
     experiment = Experiment(
-        gamename,
-        optimizer,
-        num_episode,
-        eval_steps,
-        num_worker_trial,
-        antithetic,
-        cap_time_mode,
-        retrain_mode,
-        seed_start,
-        sigma_init,
-        sigma_decay,
-        batch_mode,
+        **params
     )
     communicator = Communicator(
         10000,
-        (5 + experiment.model.param_count) * num_worker_trial,
-        4 * num_worker_trial,
-        num_worker_trial,
+        (5 + experiment.model.param_count) * params['num_worker_trial'],
+        4 * params['num_worker_trial'],
+        params['num_worker_trial'],
         experiment.game.input_size,
     )
 
@@ -587,44 +541,11 @@ if __name__ == "__main__":
         )
     )
     parser.add_argument(
-        "gamename", type=str, help="robo_pendulum, robo_ant, robo_humanoid, etc."
+        "filename","-f", type=str, help="robo_pendulum, robo_ant, robo_humanoid, etc."
     )
-    parser.add_argument(
-        "-o", "--optimizer", type=str, help="ses, pepg, openes, ga, cma.", default="cma"
-    )
-    parser.add_argument(
-        "-e", "--num_episode", type=int, default=1, help="num episodes per trial"
-    )
-    parser.add_argument(
-        "--eval_steps", type=int, default=25, help="evaluate every eval_steps step"
-    )
-    parser.add_argument(
-        "-t", "--num_worker_trial", type=int, help="trials per worker", default=4
-    )
-    parser.add_argument(
-        "--antithetic",
-        type=int,
-        default=1,
-        help="set to 0 to disable antithetic sampling",
-    )
-    parser.add_argument(
-        "--cap_time",
-        type=int,
-        default=0,
-        help="set to 0 to disable capping timesteps to 2x of average.",
-    )
-    parser.add_argument(
-        "--retrain",
-        type=int,
-        default=0,
-        help="set to 0 to disable retraining every eval_steps if results suck.\n only works w/ ses, openes, pepg.",
-    )
-    parser.add_argument(
-        "-s", "--seed_start", type=int, default=111, help="initial seed"
-    )
-    parser.add_argument("--sigma_init", type=float, default=0.10, help="sigma_init")
-    parser.add_argument("--sigma_decay", type=float, default=0.999, help="sigma_decay")
-    parser.add_argument("--batch_mode", type=str, default="mean", help="batch_mode")
-
     args = parser.parse_args()
-    main(args)
+    parameters = None
+
+    with open(args.filename, 'r',encoding='utf-8') as json_file:
+        parameters = json.load(json_file)
+    main(parameters)
