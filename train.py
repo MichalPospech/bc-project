@@ -43,8 +43,6 @@ class Experiment(object):
         cap_time,
         retrain,
         seed_start,
-        sigma_init,
-        sigma_decay,
         batch_mode,
     ):
         algorithm_name = algorithm["name"]
@@ -87,9 +85,7 @@ class Experiment(object):
         optimizer_name = algorithm_params["name"]
         algorithm_params.pop("name")
         es = None
-        if optimizer_name == "ses":
-            es = PEPG(num_params, popsize=population, **algorithm_params)
-        elif optimizer_name == "ga":
+        if optimizer_name == "ga":
             es = SimpleGA(num_params, popsize=population, **algorithm_params)
         elif optimizer_name == "cma":
             es = CMAES(num_params, popsize=population, **algorithm_params)
@@ -484,13 +480,14 @@ def master(experiment, communicator):
 # TODO Assert parameters (num episodes = 1 for novelty, etc.)
 # TODO Config from JSON
 def main(params):
-
+    num_worker_trial = params["num_worker_trial"]
+    params.pop("num_worker_trial")
     experiment = Experiment(**params)
     communicator = Communicator(
         10000,
-        (5 + experiment.model.param_count) * params["num_worker_trial"],
-        4 * params["num_worker_trial"],
-        params["num_worker_trial"],
+        (5 + experiment.model.param_count) * num_worker_trial,
+        4 * num_worker_trial,
+        num_worker_trial,
         experiment.game.input_size,
     )
 
