@@ -212,8 +212,15 @@ class Communicator:
         assert len(result_packet) == self.result_packet_size
         comm.Send(result_packet, dest=0)
 
+    def send_command_to_slaves(self, command):
+        for i in range(1, num_worker + 1):
+            comm.send(command, dest=i)
+    def receive_command_from_master(self):
+        return comm.recv(source=0)
+
     def send_packets_to_slaves(self, packet_list):
         assert len(packet_list) == num_worker
+        self.send_command_to_slaves("eval")
         for i in range(1, num_worker + 1):
             packet = packet_list[i - 1]
             assert len(packet) == self.solution_packet_size
@@ -264,6 +271,9 @@ def worker(experiment, weights, seed, train_mode_int=1, max_len=-1):
 def slave(experiment, communicator):
     experiment.model.make_env()
     while 1:
+        command = communicator.receive_command_from_master()
+        if (command == "kill"):
+            break
         solutions = communicator.recive_solution_packet()
         results = []
         for solution in solutions:
@@ -482,6 +492,7 @@ def master(experiment, communicator):
                 "best",
                 best_reward_eval,
             )
+    communicator.send_command_to_slaves("kill")
 
 
 def main(params):
