@@ -1,0 +1,15 @@
+{
+    "num_worker_trial": 50,
+    "num_episode": 1,
+    "seed_start": 42,
+    "gamename": "slimevolley",
+    "algorithm": {
+        "name": "nses",
+        "optimizer": {
+            "name": "adam",
+            "stepsize": 0.1
+        },
+        "metapopulation_size": 10,
+        "k": 5
+    }
+}

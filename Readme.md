@@ -9,6 +9,8 @@
 - `retrain`
 - `seed_start`
 - `batch_mode`
+- `antitethic`
+
 
 ## Algorithm
 - `name`
@@ -35,7 +37,6 @@
 - `learning_rate`
 - `learning_rate_decay`
 - `learning_rate_limit`
-- `antithetic`
 - `rank_fitness`
 
 ### PEPG
@@ -57,20 +58,17 @@
 - `sigma`
 - `metapopulation_size`
 - `k`
-- `antitethic`
 ### NSRES
 - `optimizer`
 - `sigma`
 - `metapopulation_size`
 - `k`
-- `antitethic`
 - `weight`
 ### NSRAES
 - `optimizer`
 - `sigma`
 - `metapopulation_size`
 - `k`
-- `antitethic`
 - `init_weight`
 - `weight_change`
 - `weight_change_threshold`
