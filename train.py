@@ -38,15 +38,19 @@ class Experiment(object):
         gamename,
         algorithm,
         num_episode,
-        eval_steps,
+        num_generations,
         num_worker_trial,
-        cap_time,
-        retrain,
         seed_start,
-        batch_mode,
+        antitethic=True,
+        eval_steps =25,
+        cap_time=-1,
+        retrain=False,
+        batch_mode="mean",
     ):
         algorithm_name = algorithm["name"]
+        self.num_generations =num_generations
         self.game = config.games[gamename]
+        self.antitethic = antitethic
         self.gamename = gamename
         self.population = num_worker * num_worker_trial
         self.retrain_mode = retrain
@@ -54,7 +58,7 @@ class Experiment(object):
         self.seed_start = seed_start
         self.model = make_model(self.game)
         self.optimizer = Experiment.get_algorithm(
-            self.model.param_count, self.population, **algorithm
+            self.model.param_count, self.population, algorithm, antitethic
         )
         self.num_params = self.model.param_count
         self.num_worker_trial = num_worker_trial
@@ -81,7 +85,7 @@ class Experiment(object):
         return (4 + self.game.input_size) * self.num_worker_trial
 
     @staticmethod
-    def get_algorithm(num_params, population, algorithm_params):
+    def get_algorithm(num_params, population, algorithm_params, antitethic):
         optimizer_name = algorithm_params["name"]
         algorithm_params.pop("name")
         es = None
@@ -92,13 +96,13 @@ class Experiment(object):
         elif optimizer_name == "pepg":
             es = PEPG(num_params, popsize=population, **algorithm_params)
         elif optimizer_name == "nses":
-            es = NSES(num_params, popsize=population, **algorithm_params)
+            es = NSES(num_params, popsize=population, antithetic=antitethic, **algorithm_params)
         elif optimizer_name == "nsres":
-            es = NSRES(num_params, popsize=population, **algorithm_params)
+            es = NSRES(num_params, popsize=population,antithetic=antitethic, **algorithm_params)
         elif optimizer_name == "nsraes":
-            es = NSRAES(num_params, popsize=population, **algorithm_params)
+            es = NSRAES(num_params, popsize=population,antithetic=antitethic, **algorithm_params)
         elif optimizer_name == "openes":
-            es = OpenES(num_params, popsize=population, **algorithm_params)
+            es = OpenES(num_params, popsize=population, antithetic=antitethic,**algorithm_params)
         else:
             raise ValueError(f"Unknown optimizer name {optimizer_name}")
         return es
@@ -146,12 +150,14 @@ class Communicator:
         result_packet_size,
         num_worker_trial,
         final_state_size,
+        num_episode
     ):
         self.precision = precision
         self.solution_packet_size = solution_packet_size
-        self.result_packet_size = result_packet_size
         self.num_worker_trial = num_worker_trial
         self.final_state_size = final_state_size
+        self.num_episode =num_episode
+        self.result_packet_size = result_packet_size + self.num_episode*self.final_state_size*self.num_worker_trial
 
     def encode_solution_packets(self, seeds, solutions, train_mode=1, max_len=-1):
         n = len(seeds)
@@ -180,7 +186,7 @@ class Communicator:
         return r.flatten().astype(np.int32)
 
     def decode_result_packet(self, packet):
-        r = packet.reshape(self.num_worker_trial, 4 + self.final_state_size)
+        r = packet.reshape(self.num_worker_trial, 4 + self.final_state_size*self.num_episode)
         workers = r[:, 0].tolist()
         jobs = r[:, 1].tolist()
         fits = r[:, 2].astype(np.float) / self.precision
@@ -188,12 +194,11 @@ class Communicator:
         times = r[:, 3].astype(np.float) / self.precision
         times = times.tolist()
         positions = r[:, 4:].astype(np.float) / self.precision
-        positions = positions.tolist()
-
+        positions= positions.reshape((self.num_worker_trial, self.num_episode,self.final_state_size))
         result = []
         n = len(jobs)
         for i in range(n):
-            result.append([workers[i], jobs[i], fits[i], times[i], *positions[i]])
+            result.append([workers[i], jobs[i], fits[i], times[i], positions[i]])
         return result
 
     def recive_solution_packet(self):
@@ -216,6 +221,7 @@ class Communicator:
 
     def receive_packets_from_slaves(self, population):
         result_packet = np.empty(self.result_packet_size, dtype=np.int32)
+        final_pos = np.empty((population,self.num_episode, self.final_state_size))
         reward_list_total = np.zeros((population, 2))
         check_results = np.ones(population, dtype=np.int)
         for i in range(1, num_worker + 1):
@@ -229,6 +235,7 @@ class Communicator:
                 reward_list_total[idx, 0] = result[2]
                 reward_list_total[idx, 1] = result[3]
                 check_results[idx] = 0
+                final_pos[idx] = result[4]
         check_sum = check_results.sum()
         assert check_sum == 0, check_sum
         return reward_list_total
@@ -270,7 +277,7 @@ def slave(experiment, communicator):
             fitness, timesteps, end_state = worker(
                 experiment, weights, seed, train_mode, max_len
             )
-            results.append([worker_id, jobidx, fitness, timesteps, end_state])
+            results.append([worker_id, jobidx, fitness, timesteps, *end_state.tolist()])
         communicator.send_results_packet(results)
 
 
@@ -350,7 +357,7 @@ def master(experiment, communicator):
 
     max_len = -1  # max time steps (-1 means ignore)
 
-    while True:
+    while t < experiment.num_generations:
         t += 1
         es = experiment.optimizer
         solutions = experiment.optimizer.ask()
@@ -477,18 +484,15 @@ def master(experiment, communicator):
             )
 
 
-# TODO Assert parameters (num episodes = 1 for novelty, etc.)
-# TODO Config from JSON
 def main(params):
     num_worker_trial = params["num_worker_trial"]
-    params.pop("num_worker_trial")
     experiment = Experiment(**params)
     communicator = Communicator(
         10000,
         (5 + experiment.model.param_count) * num_worker_trial,
         4 * num_worker_trial,
         num_worker_trial,
-        experiment.game.input_size,
+        experiment.game.input_size, experiment.num_episode
     )
 
     sprint("process", rank, "out of total ", comm.Get_size(), "started")
@@ -506,7 +510,7 @@ if __name__ == "__main__":
         )
     )
     parser.add_argument(
-        "filename", "-f", type=str, help="robo_pendulum, robo_ant, robo_humanoid, etc."
+        "--filename", "-f", type=str, help="robo_pendulum, robo_ant, robo_humanoid, etc."
     )
     args = parser.parse_args()
     parameters = None
