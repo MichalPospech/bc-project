@@ -14,13 +14,14 @@ robo_humanoid
 
 from mpi4py import MPI
 import numpy as np
+import scipy as scp
 import json
 import os
 import subprocess
 import sys
 import config
 from model import make_model, simulate
-from es import CMAES, NSES, SimpleGA, OpenES, PEPG, NSRAES, NSRES
+from es import CMAES, NSES, SimpleGA, OpenES, PEPG, NSRAES, NSRES, NSAbstract
 import argparse
 import time
 
@@ -91,7 +92,7 @@ class Experiment(object):
         es = None
         if optimizer_name == "ga":
             es = SimpleGA(num_params, popsize=population, **algorithm_params)
-        elif optimizer_name == "cma":
+        elif optimizer_name == "cmaes":
             es = CMAES(num_params, popsize=population, **algorithm_params)
         elif optimizer_name == "pepg":
             es = PEPG(num_params, popsize=population, **algorithm_params)
@@ -225,7 +226,18 @@ class Communicator:
             packet = packet_list[i - 1]
             assert len(packet) == self.solution_packet_size
             comm.Send(packet, dest=i)
+    def receive_characteristic(self):
+        buf = np.empty((1, self.final_state_size))
+        comm.Recv(buf)
+        buf/= self.precision
+        return buf
 
+    def send_characteristic(self, characteristic):
+        encoded_char = characteristic * self.precision
+        for i in range(1, num_worker + 1):
+            comm.send("archive", i)
+            comm.Send(encoded_char, i)
+        
     def receive_packets_from_slaves(self, population):
         result_packet = np.empty(self.result_packet_size, dtype=np.int32)
         final_pos = np.empty((population,self.num_episode, self.final_state_size))
@@ -270,25 +282,39 @@ def worker(experiment, weights, seed, train_mode_int=1, max_len=-1):
 
 def slave(experiment, communicator):
     experiment.model.make_env()
-    while 1:
+    archive = None
+    while True:
         command = communicator.receive_command_from_master()
         if (command == "kill"):
             break
-        solutions = communicator.recive_solution_packet()
-        results = []
-        for solution in solutions:
-            worker_id, jobidx, seed, train_mode, max_len, weights = solution
-            assert train_mode == 1 or train_mode == 0, str(train_mode)
-            worker_id = int(worker_id)
-            possible_error = "work_id = " + str(worker_id) + " rank = " + str(rank)
-            assert worker_id == rank, possible_error
-            jobidx = int(jobidx)
-            seed = int(seed)
-            fitness, timesteps, end_state = worker(
-                experiment, weights, seed, train_mode, max_len
-            )
-            results.append([worker_id, jobidx, fitness, timesteps, *end_state.tolist()])
-        communicator.send_results_packet(results)
+        elif (command == "archive"):
+            characteristic = communicator.receive_characteristic()
+            if archive is not None:
+                archive = np.append(archive, characteristic)
+            else:
+                archive = characteristic.copy()
+            pass
+        else:
+            solutions = communicator.recive_solution_packet()
+            results = []
+            for solution in solutions:
+                worker_id, jobidx, seed, train_mode, max_len, weights = solution
+                assert train_mode == 1 or train_mode == 0, str(train_mode)
+                worker_id = int(worker_id)
+                possible_error = "work_id = " + str(worker_id) + " rank = " + str(rank)
+                assert worker_id == rank, possible_error
+                jobidx = int(jobidx)
+                seed = int(seed)
+                fitness, timesteps, end_states = worker(
+                    experiment, weights, seed, train_mode, max_len
+                )
+                novelty = 0
+                if issubclass(experiment.optimizer, NSAbstract):
+                    distances = scp.spatial.distance.cdist(archive, np.array(end_states))
+                    nearest = np.partition(distances, experiment.optimizer.k)[:, : experiment.optimizer.k]
+                    novelty = np.mean(nearest)
+                results.append([worker_id, jobidx, fitness, timesteps, novelty])
+            communicator.send_results_packet(results)
 
 
 def evaluate_batch(optimizer, model_params, communicator, max_len=-1):
@@ -334,7 +360,7 @@ def master(experiment, communicator):
             experiment.model,
             train_mode=False,
             render_mode=False,
-            num_episode=experiment.num_episode,
+            num_episode=1,
             seed=seed,
             max_len=max_len,
         )
@@ -358,6 +384,10 @@ def master(experiment, communicator):
         return rewards, chars
 
     experiment.optimizer.init(evaluate_initials)
+    if issubclass(type(experiment.optimizer), NSAbstract):
+        for characteristic in experiment.optimizer.characteristics:
+            communicator.send_characteristic(characteristic)
+
     t = 0
 
     history = []
@@ -406,6 +436,10 @@ def master(experiment, communicator):
                 weights, experiment, seeder.next_seed(), max_len
             ),
         )
+
+        if issubclass(type(experiment.optimizer), NSAbstract):
+            characteristic = experiment.optimizer.characteristics[-1]
+            communicator.send_characteristic(characteristic)
 
         es_solution = experiment.optimizer.result()
         model_params = es_solution[0]  # best historical solution
