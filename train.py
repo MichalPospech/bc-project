@@ -43,13 +43,13 @@ class Experiment(object):
         num_worker_trial,
         seed_start,
         antitethic=True,
-        eval_steps =25,
+        eval_steps=25,
         cap_time=-1,
         retrain=False,
         batch_mode="mean",
     ):
         algorithm_name = algorithm["name"]
-        self.num_generations =num_generations
+        self.num_generations = num_generations
         self.game = config.games[gamename]
         self.antitethic = antitethic
         self.gamename = gamename
@@ -97,13 +97,33 @@ class Experiment(object):
         elif optimizer_name == "pepg":
             es = PEPG(num_params, popsize=population, **algorithm_params)
         elif optimizer_name == "nses":
-            es = NSES(num_params, popsize=population, antithetic=antitethic, **algorithm_params)
+            es = NSES(
+                num_params,
+                popsize=population,
+                antithetic=antitethic,
+                **algorithm_params,
+            )
         elif optimizer_name == "nsres":
-            es = NSRES(num_params, popsize=population,antithetic=antitethic, **algorithm_params)
+            es = NSRES(
+                num_params,
+                popsize=population,
+                antithetic=antitethic,
+                **algorithm_params,
+            )
         elif optimizer_name == "nsraes":
-            es = NSRAES(num_params, popsize=population,antithetic=antitethic, **algorithm_params)
+            es = NSRAES(
+                num_params,
+                popsize=population,
+                antithetic=antitethic,
+                **algorithm_params,
+            )
         elif optimizer_name == "openes":
-            es = OpenES(num_params, popsize=population, antithetic=antitethic,**algorithm_params)
+            es = OpenES(
+                num_params,
+                popsize=population,
+                antithetic=antitethic,
+                **algorithm_params,
+            )
         else:
             raise ValueError(f"Unknown optimizer name {optimizer_name}")
         return es
@@ -151,14 +171,12 @@ class Communicator:
         result_packet_size,
         num_worker_trial,
         final_state_size,
-        num_episode
     ):
         self.precision = precision
         self.solution_packet_size = solution_packet_size
         self.num_worker_trial = num_worker_trial
         self.final_state_size = final_state_size
-        self.num_episode =num_episode
-        self.result_packet_size = result_packet_size + self.num_episode*self.final_state_size*self.num_worker_trial
+        self.result_packet_size = result_packet_size
 
     def encode_solution_packets(self, seeds, solutions, train_mode=1, max_len=-1):
         n = len(seeds)
@@ -187,19 +205,18 @@ class Communicator:
         return r.flatten().astype(np.int32)
 
     def decode_result_packet(self, packet):
-        r = packet.reshape(self.num_worker_trial, 4 + self.final_state_size*self.num_episode)
+        r = packet.reshape(self.num_worker_trial, 5)
         workers = r[:, 0].tolist()
         jobs = r[:, 1].tolist()
         fits = r[:, 2].astype(np.float) / self.precision
         fits = fits.tolist()
         times = r[:, 3].astype(np.float) / self.precision
         times = times.tolist()
-        positions = r[:, 4:].astype(np.float) / self.precision
-        positions= positions.reshape((self.num_worker_trial, self.num_episode,self.final_state_size))
+        novelties = r[:, 4].astype(np.float) / self.precision
         result = []
         n = len(jobs)
         for i in range(n):
-            result.append([workers[i], jobs[i], fits[i], times[i], positions[i]])
+            result.append([workers[i], jobs[i], fits[i], times[i], novelties[i]])
         return result
 
     def recive_solution_packet(self):
@@ -216,6 +233,7 @@ class Communicator:
     def send_command_to_slaves(self, command):
         for i in range(1, num_worker + 1):
             comm.send(command, dest=i)
+
     def receive_command_from_master(self):
         return comm.recv(source=0)
 
@@ -226,10 +244,11 @@ class Communicator:
             packet = packet_list[i - 1]
             assert len(packet) == self.solution_packet_size
             comm.Send(packet, dest=i)
+
     def receive_characteristic(self):
         buf = np.empty((1, self.final_state_size))
         comm.Recv(buf)
-        buf/= self.precision
+        buf /= self.precision
         return buf
 
     def send_characteristic(self, characteristic):
@@ -237,11 +256,10 @@ class Communicator:
         for i in range(1, num_worker + 1):
             comm.send("archive", i)
             comm.Send(encoded_char, i)
-        
+
     def receive_packets_from_slaves(self, population):
         result_packet = np.empty(self.result_packet_size, dtype=np.int32)
-        final_pos = np.empty((population,self.num_episode, self.final_state_size))
-        reward_list_total = np.zeros((population, 2))
+        reward_list_total = np.zeros((population, 3))
         check_results = np.ones(population, dtype=np.int)
         for i in range(1, num_worker + 1):
             comm.Recv(result_packet, source=i)
@@ -253,8 +271,7 @@ class Communicator:
                 idx = int(result[1])
                 reward_list_total[idx, 0] = result[2]
                 reward_list_total[idx, 1] = result[3]
-                check_results[idx] = 0
-                final_pos[idx] = result[4]
+                reward_list_total[idx, 2] = result[4]
         check_sum = check_results.sum()
         assert check_sum == 0, check_sum
         return reward_list_total
@@ -285,9 +302,9 @@ def slave(experiment, communicator):
     archive = None
     while True:
         command = communicator.receive_command_from_master()
-        if (command == "kill"):
+        if command == "kill":
             break
-        elif (command == "archive"):
+        elif command == "archive":
             characteristic = communicator.receive_characteristic()
             if archive is not None:
                 archive = np.append(archive, characteristic)
@@ -310,8 +327,12 @@ def slave(experiment, communicator):
                 )
                 novelty = 0
                 if issubclass(experiment.optimizer, NSAbstract):
-                    distances = scp.spatial.distance.cdist(archive, np.array(end_states))
-                    nearest = np.partition(distances, experiment.optimizer.k)[:, : experiment.optimizer.k]
+                    distances = scp.spatial.distance.cdist(
+                        archive, np.array(end_states)
+                    )
+                    nearest = np.partition(distances, experiment.optimizer.k)[
+                        :, : experiment.optimizer.k
+                    ]
                     novelty = np.mean(nearest)
                 results.append([worker_id, jobidx, fitness, timesteps, novelty])
             communicator.send_results_packet(results)
@@ -369,16 +390,10 @@ def master(experiment, communicator):
         return reward, end_state
 
     def evaluate_initials(solutions):
-        if experiment.antitethic:
-            seeds = seeder.next_batch(int(experiment.optimizer.popsize / 2))
-            seeds = seeds + seeds
-        else:
-            seeds = seeder.next_batch(experiment.optimizer.popsize)
-
         chars = []
         rewards = []
-        for i in range(solutions.dim[0]):
-            r, c = evaluate_locally(solutions[i, :], experiment, seeds[i], max_len)
+        for solution in solutions:
+            r, c = evaluate_locally(solution, experiment, seeder.next_seed(), max_len)
             rewards.append(r)
             chars.append(c)
         return rewards, chars
@@ -427,11 +442,11 @@ def master(experiment, communicator):
         )  # get average time step
         avg_reward = int(np.mean(reward_list) * 100) / 100.0  # get average time step
         std_reward = int(np.std(reward_list) * 100) / 100.0  # get average time step
-        chars = reward_list_total[:, 4:]
+        novelties = reward_list_total[:, 4]
 
         experiment.optimizer.tell(
             reward_list,
-            chars,
+            novelties,
             lambda weights: evaluate_locally(
                 weights, experiment, seeder.next_seed(), max_len
             ),
@@ -535,9 +550,9 @@ def main(params):
     communicator = Communicator(
         10000,
         (5 + experiment.model.param_count) * num_worker_trial,
-        4 * num_worker_trial,
+        5 * num_worker_trial,
         num_worker_trial,
-        experiment.game.input_size, experiment.num_episode
+        experiment.game.input_size,
     )
 
     sprint("process", rank, "out of total ", comm.Get_size(), "started")
@@ -555,7 +570,10 @@ if __name__ == "__main__":
         )
     )
     parser.add_argument(
-        "--filename", "-f", type=str, help="robo_pendulum, robo_ant, robo_humanoid, etc."
+        "--filename",
+        "-f",
+        type=str,
+        help="robo_pendulum, robo_ant, robo_humanoid, etc.",
     )
     args = parser.parse_args()
     parameters = None
