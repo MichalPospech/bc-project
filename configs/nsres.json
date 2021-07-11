@@ -5,7 +5,7 @@
     "num_generations": 1000,
     "gamename": "slimevolley",
     "algorithm": {
-        "name": "nses",
+        "name": "nsres",
         "optimizer": {
             "name": "adam",
             "stepsize": 0.1

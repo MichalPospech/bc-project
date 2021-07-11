@@ -3,9 +3,9 @@
     "num_episode": 5,
     "seed_start": 42,
     "num_generations": 1000,
-    "gamename": "slimevolley",
+    "gamename": "cartpole_swingup",
     "algorithm": {
-        "name": "nses",
+        "name": "nsraes",
         "optimizer": {
             "name": "adam",
             "stepsize": 0.1

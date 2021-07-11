@@ -1,10 +1,10 @@
 {
-    "num_worker_trial": 4,
-    "num_episode": 3,
-    "num_generations": 50,
+    "num_worker_trial": 5,
+    "num_episode": 5,
+    "num_generations": 1000,
     "seed_start": 42,
     "gamename": "slimevolley",
-    "antitethic":true,
+    "antitethic":false,
     "algorithm": {
         "name": "openes",
         "optimizer": {
