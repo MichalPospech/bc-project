@@ -272,6 +272,8 @@ class Communicator:
                 reward_list_total[idx, 0] = result[2]
                 reward_list_total[idx, 1] = result[3]
                 reward_list_total[idx, 2] = result[4]
+                check_results[idx] = 0
+
         check_sum = check_results.sum()
         assert check_sum == 0, check_sum
         return reward_list_total
@@ -326,7 +328,7 @@ def slave(experiment, communicator):
                     experiment, weights, seed, train_mode, max_len
                 )
                 novelty = 0
-                if issubclass(experiment.optimizer, NSAbstract):
+                if issubclass(type(experiment.optimizer), NSAbstract):
                     distances = scp.spatial.distance.cdist(
                         archive, np.array(end_states)
                     )
@@ -442,7 +444,7 @@ def master(experiment, communicator):
         )  # get average time step
         avg_reward = int(np.mean(reward_list) * 100) / 100.0  # get average time step
         std_reward = int(np.std(reward_list) * 100) / 100.0  # get average time step
-        novelties = reward_list_total[:, 4]
+        novelties = reward_list_total[:, 2]
 
         experiment.optimizer.tell(
             reward_list,
