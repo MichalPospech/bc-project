@@ -14,7 +14,7 @@ robo_humanoid
 
 from mpi4py import MPI
 import numpy as np
-import scipy as scp
+import scipy.spatial as spat
 import json
 import os
 import subprocess
@@ -309,10 +309,9 @@ def slave(experiment, communicator):
         elif command == "archive":
             characteristic = communicator.receive_characteristic()
             if archive is not None:
-                archive = np.append(archive, characteristic)
+                archive = np.append(archive, characteristic, axis=0)
             else:
                 archive = characteristic.copy()
-            pass
         else:
             solutions = communicator.recive_solution_packet()
             results = []
@@ -329,10 +328,8 @@ def slave(experiment, communicator):
                 )
                 novelty = 0
                 if issubclass(type(experiment.optimizer), NSAbstract):
-                    distances = scp.spatial.distance.cdist(
-                        archive, np.array(end_states)
-                    )
-                    nearest = np.partition(distances, experiment.optimizer.k)[
+                    distances = spat.distance.cdist(archive, np.array(end_states))
+                    nearest = np.partition(distances.T, experiment.optimizer.k, axis=1)[
                         :, : experiment.optimizer.k
                     ]
                     novelty = np.mean(nearest)
@@ -376,6 +373,7 @@ def master(experiment, communicator):
     filename_best = experiment.log_filebase + ".best.json"
 
     experiment.model.make_env()
+    max_len = -1  # max time steps (-1 means ignore)
 
     def evaluate_locally(weights, experiment, seed, max_len):
         experiment.model.set_model_params(weights)
@@ -412,8 +410,6 @@ def master(experiment, communicator):
     best_reward_eval = 0
     best_model_params_eval = None
 
-    max_len = -1  # max time steps (-1 means ignore)
-
     while t < experiment.num_generations:
         t += 1
         es = experiment.optimizer
@@ -442,9 +438,14 @@ def master(experiment, communicator):
         max_time_step = (
             int(np.max(reward_list_total[:, 1]) * 100) / 100.0
         )  # get average time step
-        avg_reward = int(np.mean(reward_list) * 100) / 100.0  # get average time step
-        std_reward = int(np.std(reward_list) * 100) / 100.0  # get average time step
+        avg_reward = int(np.mean(reward_list) * 100) / 100.0
+        std_reward = int(np.std(reward_list) * 100) / 100.0
         novelties = reward_list_total[:, 2]
+
+        avg_novelty = int(np.mean(novelties) * 100) / 100.0
+        std_novelty = int(np.std(novelties) * 100) / 100.0
+        min_novelty = int(np.min(novelties) * 100) / 100.0
+        max_novelty = int(np.max(novelties) * 100) / 100.0
 
         experiment.optimizer.tell(
             reward_list,
@@ -474,6 +475,10 @@ def master(experiment, communicator):
             r_min,
             r_max,
             std_reward,
+            avg_novelty,
+            min_novelty,
+            max_novelty,
+            std_novelty,
             int(es.rms_stdev() * 100000) / 100000.0,
             mean_time_step + 1.0,
             int(max_time_step) + 1,
