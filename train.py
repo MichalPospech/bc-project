@@ -246,13 +246,14 @@ class Communicator:
             comm.Send(packet, dest=i)
 
     def receive_characteristic(self):
-        buf = np.empty((1, self.final_state_size))
+        buf = np.empty((1, self.final_state_size*self.num_worker_trial))
         comm.Recv(buf)
         buf /= self.precision
+        buf = buf.reshape(self.num_worker_trial, self.final_state_size)
         return buf
 
     def send_characteristic(self, characteristic):
-        encoded_char = characteristic * self.precision
+        encoded_char = characteristic.flatten() * self.precision
         for i in range(1, num_worker + 1):
             comm.send("archive", i)
             comm.Send(encoded_char, i)
@@ -328,10 +329,12 @@ def slave(experiment, communicator):
                 )
                 novelty = 0
                 if issubclass(type(experiment.optimizer), NSAbstract):
-                    distances = spat.distance.cdist(archive, np.array(end_states))
-                    nearest = np.partition(distances.T, experiment.optimizer.k, axis=1)[
-                        :, : experiment.optimizer.k
-                    ]
+                    distances = []
+                    for characteristic in archive:
+                        distance = np.mean(spat.distance.cdist(characteristic, np.array(end_states)))
+                        distances.append(distance)
+                    distances = np.array(distances)
+                    nearest = np.partition(distances, experiment.optimizer.k)[ : experiment.optimizer.k  ]
                     novelty = np.mean(nearest)
                 results.append([worker_id, jobidx, fitness, timesteps, novelty])
             communicator.send_results_packet(results)
@@ -381,13 +384,12 @@ def master(experiment, communicator):
             experiment.model,
             train_mode=False,
             render_mode=False,
-            num_episode=1,
+            num_episode=experiment.num_worker_trial,
             seed=seed,
             max_len=max_len,
         )
-        reward = reward_list[0]
-        end_state = end_states[0]
-        return reward, end_state
+
+        return np.mean(np.array(reward_list)), end_states
 
     def evaluate_initials(solutions):
         chars = []
