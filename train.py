@@ -36,6 +36,7 @@ PRECISION = 10000
 class Experiment(object):
     def __init__(
         self,
+        identifier,
         gamename,
         algorithm,
         num_episode,
@@ -69,6 +70,8 @@ class Experiment(object):
             + gamename
             + "."
             + algorithm_name
+            + "."
+            + identifier
             + "."
             + str(self.num_episode)
             + "."
