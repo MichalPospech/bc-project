@@ -173,13 +173,15 @@ class Communicator:
         solution_packet_size,
         result_packet_size,
         num_worker_trial,
-        final_state_size,
+        char_size,
+        num_episode
     ):
         self.precision = precision
         self.solution_packet_size = solution_packet_size
         self.num_worker_trial = num_worker_trial
-        self.final_state_size = final_state_size
+        self.char_size = char_size
         self.result_packet_size = result_packet_size
+        self.num_episode = num_episode
 
     def encode_solution_packets(self, seeds, solutions, train_mode=1, max_len=-1):
         n = len(seeds)
@@ -249,10 +251,10 @@ class Communicator:
             comm.Send(packet, dest=i)
 
     def receive_characteristic(self):
-        buf = np.empty((1, self.final_state_size*self.num_worker_trial))
+        buf = np.empty((1, self.char_size*self.num_episode))
         comm.Recv(buf)
         buf /= self.precision
-        buf = buf.reshape(self.num_worker_trial, self.final_state_size)
+        buf = buf.reshape(1,self.num_episode, self.char_size)
         return buf
 
     def send_characteristic(self, characteristic):
@@ -287,7 +289,7 @@ def worker(experiment, weights, seed, train_mode_int=1, max_len=-1):
 
     train_mode = train_mode_int == 1
     experiment.model.set_model_params(weights)
-    reward_list, t_list, end_state = simulate(
+    reward_list, t_list, characteristics = simulate(
         experiment.model,
         train_mode=train_mode,
         render_mode=False,
@@ -300,7 +302,7 @@ def worker(experiment, weights, seed, train_mode_int=1, max_len=-1):
     else:
         reward = np.mean(reward_list)
     t = np.mean(t_list)
-    return reward, t, end_state
+    return reward, t, characteristics
 
 
 def slave(experiment, communicator):
@@ -327,14 +329,14 @@ def slave(experiment, communicator):
                 assert worker_id == rank, possible_error
                 jobidx = int(jobidx)
                 seed = int(seed)
-                fitness, timesteps, end_states = worker(
+                fitness, timesteps, characteristics = worker(
                     experiment, weights, seed, train_mode, max_len
                 )
                 novelty = 0
                 if issubclass(type(experiment.optimizer), NSAbstract):
                     distances = []
                     for characteristic in archive:
-                        distance = np.mean(spat.distance.cdist(characteristic, np.array(end_states)))
+                        distance = np.mean(spat.distance.cdist(characteristic, np.array(characteristics)))
                         distances.append(distance)
                     distances = np.array(distances)
                     nearest = np.partition(distances, experiment.optimizer.k)[ : experiment.optimizer.k  ]
@@ -387,7 +389,7 @@ def master(experiment, communicator):
             experiment.model,
             train_mode=False,
             render_mode=False,
-            num_episode=experiment.num_worker_trial,
+            num_episode=experiment.num_episode,
             seed=seed,
             max_len=max_len,
         )
@@ -515,11 +517,22 @@ def master(experiment, communicator):
         if t % experiment.eval_steps == 0:  # evaluate on actual task at hand
 
             prev_best_reward_eval = best_reward_eval
-            model_params_quantized = np.array(es.current_param()).round(4)
-            reward_eval = evaluate_batch(
-                experiment.optimizer, model_params_quantized, communicator, max_len=-1
-            )
-            model_params_quantized = model_params_quantized.tolist()
+            if(not issubclass(type(experiment.optimizer), NSAbstract)):
+                model_params_quantized = np.array(es.current_param()).round(4)
+                reward_eval = evaluate_batch(
+                    experiment.optimizer, model_params_quantized, communicator, max_len=-1
+                )
+                model_params_quantized = model_params_quantized.tolist()
+            else:
+                reward_eval=0
+                for model in experiment.optimizer.population:
+                    reward = evaluate_batch(
+                        experiment.optimizer, model.round(4), communicator, max_len=-1
+                    )
+                    if reward>reward_eval:
+                        reward_eval = reward
+                        model_params_quantized = model.round(4).tolist()
+
             improvement = reward_eval - best_reward_eval
             eval_log.append([t, reward_eval, model_params_quantized])
             with open(filename_log, "wt") as out:
@@ -564,7 +577,8 @@ def main(params):
         (5 + experiment.model.param_count) * num_worker_trial,
         5 * num_worker_trial,
         num_worker_trial,
-        experiment.game.input_size,
+        6,
+        experiment.num_episode
     )
 
     sprint("process", rank, "out of total ", comm.Get_size(), "started")
