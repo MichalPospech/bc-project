@@ -1,9 +1,9 @@
 {
-    "num_worker_trial": 5,
+    "num_worker_trial": 30,
     "num_episode": 5,
     "num_generations": 1000,
-    "seed_start": 1,
-    "identifier":"openes-1",
+    "seed_start": SEED,
+    "identifier":"slime-openes-adam-30i-1000g-SEED",
     "gamename": "slimevolley",
     "antitethic":false,
     "algorithm": {
