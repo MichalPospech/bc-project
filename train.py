@@ -339,7 +339,8 @@ def slave(experiment, communicator):
                         distance = np.mean(spat.distance.cdist(characteristic, np.array(characteristics)))
                         distances.append(distance)
                     distances = np.array(distances)
-                    nearest = np.partition(distances, experiment.optimizer.k)[ : experiment.optimizer.k  ]
+                    indices = distances.argsort()[:experiment.optimizer.k]
+                    nearest = distances[indices]
                     novelty = np.mean(nearest)
                 results.append([worker_id, jobidx, fitness, timesteps, novelty])
             communicator.send_results_packet(results)
@@ -599,7 +600,8 @@ if __name__ == "__main__":
         "--filename",
         "-f",
         type=str,
-        help="robo_pendulum, robo_ant, robo_humanoid, etc.",
+        help="Path to config file",
+        required=True
     )
     args = parser.parse_args()
     parameters = None
