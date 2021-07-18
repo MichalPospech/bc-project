@@ -1,10 +1,10 @@
 {
     "num_worker_trial": 30,
-    "num_episode": 5,
+    "num_episode": 3,
     "seed_start": SEED,
     "num_generations": 1000,
     "gamename": "slimevolley",
-    "identifier":"cart-nsres-adam-30i-1000g-SEED",
+    "identifier":"slime-nsres-adam-30i-1000g-SEED",
     "algorithm": {
         "name": "nsres",
         "optimizer": {
