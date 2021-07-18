@@ -1,0 +1,12 @@
+{
+    "num_worker_trial": 30,
+    "num_episode": 5,
+    "num_generations": 1000,
+    "seed_start": SEED,
+    "identifier":"cart-cmaes-30i-1000g-SEED",
+    "gamename": "cartpole_swingup",
+    "antitethic":true,
+    "algorithm": {
+        "name": "cmaes"
+    }
+}

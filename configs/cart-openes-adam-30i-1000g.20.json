@@ -1,0 +1,16 @@
+{
+    "num_worker_trial": 30,
+    "num_episode": 5,
+    "num_generations": 1000,
+    "seed_start": 20,
+    "identifier":"slime-openes-adam-30i-1000g-20",
+    "gamename": "cartpole_swingup",
+    "antitethic":false,
+    "algorithm": {
+        "name": "openes",
+        "optimizer": {
+            "name": "adam",
+            "stepsize":0.1
+        }
+    }
+}
