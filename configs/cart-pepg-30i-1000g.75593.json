@@ -1,0 +1,12 @@
+{
+    "num_worker_trial": 30,
+    "num_episode": 3,
+    "num_generations": 1000,
+    "seed_start": 75593,
+    "identifier":"cart-pepg-30i-1000g-75593",
+    "gamename": "cartpole_swingup",
+    "antitethic":true,
+    "algorithm": {
+        "name": "pepg"
+    }
+}

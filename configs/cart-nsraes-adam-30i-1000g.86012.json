@@ -1,0 +1,17 @@
+{
+    "num_worker_trial": 30,
+    "num_episode": 3,
+    "seed_start": 86012,
+    "num_generations": 1000,
+    "gamename": "cartpole_swingup",
+    "identifier":"cart-nsraes-adam-30i-1000g-86012",
+    "algorithm": {
+        "name": "nsraes",
+        "optimizer": {
+            "name": "adam",
+            "stepsize": 0.1
+        },
+        "metapopulation_size": 3,
+        "k": 5
+    }
+}
