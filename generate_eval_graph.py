@@ -10,7 +10,6 @@ graph_name = sys.argv[1]
 
 
 df = None
-print(log_names)
 
 for log_name in log_names:
     with open(log_name) as log_file:
@@ -24,7 +23,7 @@ for log_name in log_names:
 
 plot = sb.lineplot(data=df, x=0, y=1, ci="sd")
 plot.set_xlabel("Timestep")
-plot.set_xlabel("Reward")
+plot.set_ylabel("Reward")
 
 plot.get_figure().savefig(f"{graph_name}.png")
 
