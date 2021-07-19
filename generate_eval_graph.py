@@ -23,5 +23,8 @@ for log_name in log_names:
 
 
 plot = sb.lineplot(data=df, x=0, y=1, ci="sd")
-plot.savefig(f"{graph_name}.svg")
+plot.set_xlabel("Timestep")
+plot.set_xlabel("Reward")
+
+plot.get_figure().savefig(f"{graph_name}.png")
 
