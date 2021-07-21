@@ -46,7 +46,6 @@ class Experiment(object):
         antitethic=True,
         eval_steps=25,
         cap_time=-1,
-        retrain=False,
         batch_mode="mean",
     ):
         algorithm_name = algorithm["name"]
@@ -55,7 +54,6 @@ class Experiment(object):
         self.antitethic = antitethic
         self.gamename = gamename
         self.population = num_worker * num_worker_trial
-        self.retrain_mode = retrain
         self.cap_time_mode = cap_time
         self.seed_start = seed_start
         self.model = make_model(self.game)
@@ -541,13 +539,7 @@ def master(experiment, communicator):
             if len(eval_log) == 1 or reward_eval > best_reward_eval:
                 best_reward_eval = reward_eval
                 best_model_params_eval = model_params_quantized
-            else:
-                if experiment.retrain_mode:
-                    sprint(
-                        "reset to previous best params, where best_reward_eval =",
-                        best_reward_eval,
-                    )
-                    es.set_mu(best_model_params_eval)
+
             with open(filename_best, "wt") as out:
                 json.dump(
                     [best_model_params_eval, best_reward_eval],
