@@ -1,0 +1,12 @@
+{
+    "num_worker_trial": 30,
+    "num_episode": 3,
+    "num_generations": 1000,
+    "seed_start": 34678981,
+    "identifier":"slime-cmaes-30i-1000g-34678981",
+    "gamename": "slimevolley",
+    "antitethic":true,
+    "algorithm": {
+        "name": "cmaes"
+    }
+}

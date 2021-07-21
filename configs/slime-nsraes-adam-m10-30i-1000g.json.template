@@ -1,0 +1,17 @@
+{
+    "num_worker_trial": 30,
+    "num_episode": 3,
+    "seed_start": SEED,
+    "num_generations": 1000,
+    "gamename": "slimevolley",
+    "identifier":"slime-nsraes-adam-m10-30i-1000g-SEED",
+    "algorithm": {
+        "name": "nsraes",
+        "optimizer": {
+            "name": "adam",
+            "stepsize": 0.1
+        },
+        "metapopulation_size": 10,
+        "k": 5
+    }
+}
