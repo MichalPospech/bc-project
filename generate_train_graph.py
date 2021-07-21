@@ -28,9 +28,10 @@ for log_name in log_names:
             df = temp_df
 
 
+print(df.describe())
 plot = sb.lineplot(data=df, x=0, y=2, ci=None, estimator=np.median)
 grouped = df.groupby(0)[2].quantile((0.25,0.75)).unstack()
-plot.fill_between(x = grouped.index,y1 = grouped.iloc[:,0],y2=grouped.iloc[:,1])
+plot.fill_between(x = grouped.index,y1 = grouped.iloc[:,0],y2=grouped.iloc[:,1], alpha=0.25)
 plot.set_xlabel("Timestep")
 plot.set_ylabel("Reward")
 plot.set_title(title)
