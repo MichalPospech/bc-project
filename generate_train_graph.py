@@ -45,5 +45,7 @@ plot.set_xlim(lower_y_limit,upper_y_limit)
 
 plot.get_figure().savefig(f"{graph_name}.png")
 plot.get_figure().savefig(f"{graph_name}.svg")
+plot.get_figure().savefig(f"{graph_name}.pdf")
+
 
 

@@ -1,7 +1,7 @@
 source .env/bin/activate
 
-python generate_train_graph.py "Training - PEPG - Slimevolley" "train-slime-pepg" -2 35  0 1000 ./log/*slime-pepg*.hist.json
-python generate_eval_graph.py "Evaluation - PEPG - Slimevolley" "eval-slime-pepg" -2 35 25 1000 ./log/*slime-pepg*.log.json
+python generate_train_graph.py "Training - PGPE - Slimevolley" "train-slime-pepg" -2 35  0 1000 ./log/*slime-pepg*.hist.json
+python generate_eval_graph.py "Evaluation - PGPE - Slimevolley" "eval-slime-pepg" -2 35 25 1000 ./log/*slime-pepg*.log.json
 
 
 python generate_train_graph.py "Training - OpenAI-ES - Slimevolley" "train-slime-open" -2 35 0 1000 ./log/*slime-open*.hist.json
@@ -33,8 +33,8 @@ python generate_eval_graph.py "Evaluation - NS-ES - Slimevolley" "eval-slime-nse
 
 
 
-python generate_train_graph.py "Training - PEPG - Cartpole" "train-cart-pepg" 0 1000  0 1000 ./log/*cart-pepg*.hist.json
-python generate_eval_graph.py "Evaluation - PEPG - Cartpole" "eval-cart-pepg" 0 1000 25 1000 ./log/*cart-pepg*.log.json
+python generate_train_graph.py "Training - PGPE - Cartpole" "train-cart-pepg" 0 1000  0 1000 ./log/*cart-pepg*.hist.json
+python generate_eval_graph.py "Evaluation - PGPE - Cartpole" "eval-cart-pepg" 0 1000 25 1000 ./log/*cart-pepg*.log.json
 
 
 python generate_train_graph.py "Training - OpenAI-ES - Cartpole" "train-cart-open" 0 1000  0 1000 ./log/*cart-open*.hist.json
