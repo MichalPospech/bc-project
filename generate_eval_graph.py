@@ -5,12 +5,16 @@ import sys
 import json
 import numpy as np
 import matplotlib.pyplot as plt
+sb.set_context("paper")
 
 title = sys.argv[1]
-log_names = sys.argv[5:]
+log_names = sys.argv[7:]
 graph_name = sys.argv[2]
 lower_limit = int(sys.argv[3])
 upper_limit = int(sys.argv[4])
+
+lower_y_limit = int(sys.argv[5])
+upper_y_limit = int(sys.argv[6])
 
 
 df = None
@@ -33,6 +37,7 @@ plot.set_xlabel("Timestep")
 plot.set_ylabel("Reward")
 plot.set_title(title)
 plot.set_ylim(lower_limit, upper_limit)
+plot.set_xlim(lower_y_limit,upper_y_limit)
 
 
 plot.get_figure().savefig(f"{graph_name}.png")
